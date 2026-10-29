@@ -11,9 +11,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "benchmark:models": "tsx scripts/benchmark-models.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.104",
+    "@ai-sdk/openai-compatible": "^3.0.80",
     "@babel/standalone": "8.0.9",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
@@ -45,6 +48,7 @@
     "@tscircuit/runframe": "0.0.3087",
     "@tscircuit/schematic-trace-solver": "0.0.214",
     "@tscircuit/schematic-viewer": "2.0.105",
+    "ai": "^7.0.156",
     "altiumts": "0.0.59",
     "bpc-graph": "0.0.67",
     "bun-match-svg": "0.0.17",
@@ -59,6 +63,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.1.1",
+    "dotenv": "^18.0.9",
     "easyeda": "0.0.385",
     "fuse.js": "7.5.0",
     "graphics-debug": "0.0.101",
@@ -80,6 +85,8 @@
     "spicets": "0.0.5",
     "tailwind-merge": "^3.3.1",
     "tscircuit": "0.0.3036",
+    "tsx": "^4.23.15",
+    "zod": "^3.25.76",
     "zustand": "5.0.16"
   },
   "devDependencies": {

@@ -38,6 +38,7 @@
 | [08-ROADMAP-BACKLOG.md](./08-ROADMAP-BACKLOG.md) | Jalons M0–M4, backlog priorisé prêt à développer, corpus de cartes de référence | Tous |
 | [09-RISKS.md](./09-RISKS.md) | Risques, sécurité, conformité, plans de mitigation | Tous |
 | [10-WEBGPU.md](./10-WEBGPU.md) | Activation WebGPU (requis pour les viewers PCB/3D) : vérification, flags Linux, fallback sans GPU | Tous |
+| [11-BENCHMARK-M0.md](./11-BENCHMARK-M0.md) | Benchmark M0 (issue #2) : protocole, checklist providers, tableau et modèle par défaut | Tous |
 
 ## Règle d'usage
 

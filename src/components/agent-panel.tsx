@@ -11,6 +11,13 @@ import { cn } from "@/lib/utils";
 
 export const MODELS = ["Meta · Spark 1.3", "Meta · Wonder 1.0", "OpenAI"];
 
+/** Issue #2 : labels UI → choix modèle serveur (un run = un modèle, doc 02 §4). */
+export const MODEL_VALUE_FOR_LABEL: Record<string, string> = {
+  "Meta · Spark 1.3": "meta-spark",
+  "Meta · Wonder 1.0": "meta-wonder",
+  OpenAI: "openai-main",
+};
+
 export interface ChatMsg { role: "user" | "agent"; text: string }
 
 function StepIcon({ status }: { status: AgentStep["status"] }) {
