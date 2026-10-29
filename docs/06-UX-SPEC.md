@@ -107,15 +107,26 @@ Aucune gate ne se valide par simple envoi d'un message ambigu : l'approbation es
 - Navigation clavier du chat et des boutons de gate.
 - Les images de snapshot générées pour le modèle ne remplacent pas le rendu interactif pour l'utilisateur.
 
-## 7. Design system — shadcn/ui + icônes Lucide (décision D10)
+## 7. Direction artistique validée (prototype, 2026-10-29)
 
-### 7.1 Base
+| Choix | Valeur |
+|---|---|
+| Univers | SaaS moderne sombre type Linear/Vercel/Bolt — explicitement **pas** l'UI verte « outil électronique » classique ni de police fantaisiste |
+| Couleur d'accent | **Orange/ambre vif** (`--primary` oklch ≈ 0.70 0.18 52) ; le vert n'est utilisé que comme couleur d'état « succès », jamais comme identité |
+| Thèmes | **Sombre + clair**, bascule par l'utilisateur (sombre par défaut) |
+| Typographie | **Space Grotesk** pour les titres/logo (caractère, sans excentricité), **Inter** pour le texte, **JetBrains Mono** uniquement pour les données techniques (références, versions) |
+| Densité | Intermédiaire : base aérée, détail technique dépliable (étapes, résultats d'outils) |
+| Premier livrable | Écran principal complet (agent + preview) avec données simulées réalistes |
+
+## 8. Design system — shadcn/ui + icônes Lucide (décision D10)
+
+### 8.1 Base
 
 - Composants **shadcn/ui** (générés dans le projet, basés sur Radix + Tailwind) : `Button`, `Textarea`, `Select`, `Tabs`, `Card`, `Badge`, `Tooltip`, `Collapsible`, `ScrollArea`, `Progress`, `Skeleton`, `AlertDialog`, `Sheet`, `Separator`, et notifications `sonner`.
 - Icônes : **Lucide** uniquement (`lucide-react`). Aucune autre bibliothèque d'icônes, aucun emoji d'interface.
 - Thème : variables CSS shadcn, mode sombre à prévoir dès la structure (pas forcément livré au MVP).
 
-### 7.2 Règle icônes vs texte
+### 8.2 Règle icônes vs texte
 
 Les actions **évidentes et fréquentes** sont iconographiques seules (avec `Tooltip` au survol et `aria-label` pour l'accessibilité). Les actions **ambiguës, engageantes ou rares** gardent une icône + un libellé court.
 
@@ -133,7 +144,7 @@ Les actions **évidentes et fréquentes** sont iconographiques seules (avec `Too
 | Onglets preview | Icône + libellé court (PCB, Schéma, 3D, BOM, Validation) | `CircuitBoard`, `DraftingCompass`/`Network`, `Box`, `List`, `ShieldCheck` |
 | États de checks | Icône d'état, jamais de texte « OK/ERREUR » seul | `Check`, `X`, `Loader2`, `CircleAlert` |
 
-### 7.3 Interdictions
+### 8.3 Interdictions
 
 - Aucun bouton « Envoyer », « Stop », « OK » en texte seul pour les actions du tableau ci-dessus.
 - Aucune icône sans signification évidente sans tooltip.

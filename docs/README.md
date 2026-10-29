@@ -17,6 +17,7 @@
 | D12 | Comptes utilisateurs | **Aucun compte au prototype** ; auth email/OAuth ajoutée avant tout lancement public/hébergé |
 | D13 | Fabricant MVP | **JLCPCB uniquement** (composants LCSC, BOM/PnP au format JLCPCB) |
 | D14 | Nom public | À chercher — NIATOLIP est uniquement le nom de travail interne |
+| D15 | Direction artistique | SaaS moderne sombre (type Linear/Vercel), accent **orange/ambre**, thèmes sombre+clair, Space Grotesk (titres) + Inter (texte) + JetBrains Mono (données), densité intermédiaire — voir `06-UX-SPEC.md` §7. Exit l'UI verte « outil électronique » |
 | D6 | Autoroutage MVP | Autorouteur tscircuit intégré ; Freerouting seulement en option ultérieure |
 | D7 | Périmètre MVP | Cartes 2 couches (4 max), 20–100 composants, basse vitesse : ESP32-C3/S3, RP2040, STM32 simples, capteurs I2C/SPI/UART, USB-C basse vitesse |
 | D8 | Hors périmètre MVP | BGA dense, DDR, RF, USB3/PCIe, impédance contrôlée critique, secteur/haute tension, médical/automobile |
