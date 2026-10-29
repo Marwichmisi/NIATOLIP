@@ -2,15 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { TopBar } from "@/components/top-bar";
-import { AgentPanel, type ChatMsg } from "@/components/agent-panel";
+import { AgentPanel, MODEL_VALUE_FOR_LABEL, type ChatMsg } from "@/components/agent-panel";
 import { PreviewPanel } from "@/components/preview-panel";
-import { INITIAL_STEPS, type AgentStep } from "@/data/mock";
+import type { AgentStep } from "@/data/mock";
+import { streamChat } from "@/lib/chat-stream";
 import type { ProjectSummary, VersionSummary } from "@/lib/projects-client";
 
-const SIM_MESSAGES = [
-  "Je pars du plan approuvé. Je vérifie d'abord les composants réels chez JLCPCB, puis je génère le code.",
-  "Schéma généré et évalué sans erreur. Je contrôle la netlist et le placement avant de lancer le routage.",
-  "Placement validé. Je lance le routage — vous pouvez suivre l'avancement dans l'aperçu PCB.",
+const TOOL_STEP_LABELS: Record<string, string> = {
+  searchComponents: "Recherche composants JLCPCB",
+  getComponentDetails: "Fiche composant",
+  writeFile: "Écriture du circuit",
+  patchFile: "Correction du circuit",
+  readFile: "Lecture projet",
+  listFiles: "Lecture projet",
+  evaluateCircuit: "Évaluation G0 + gates",
+  checkNetlist: "Gate G1 netlist",
+  checkPlacement: "Gate G2 placement",
+  checkRouting: "Gate G3 routage",
+  getCircuitSummary: "Revue netlist",
+  snapshotBoard: "État carte",
+  reportOutOfScope: "Périmètre",
+};
+
+const IDLE_STEPS: AgentStep[] = [
+  { id: "attente", label: "En attente du premier run", status: "pending", detail: "Approuvez le plan puis décrivez la carte." },
 ];
 
 const LAST_PROJECT_KEY = "niatolip:lastProjectId";
@@ -27,10 +42,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export default function Home() {
   const [model, setModel] = useState("Meta · Spark 1.3");
   const [planApproved, setPlanApproved] = useState(false);
-  const [steps, setSteps] = useState<AgentStep[]>(INITIAL_STEPS);
+  const [steps, setSteps] = useState<AgentStep[]>(IDLE_STEPS);
   const [messages, setMessages] = useState<ChatMsg[]>([GREETING]);
   const [running, setRunning] = useState(false);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const boardRef = useRef<Record<string, unknown> | null>(null);
+  const [runCost, setRunCost] = useState<{ cost: number; max: number } | null>(null);
+  const runIdRef = useRef<string | null>(null);
   const [leftW, setLeftW] = useState(400);
   const dragStart = useRef<{ x: number; w: number } | null>(null);
 
@@ -54,7 +72,8 @@ export default function Home() {
 
   const openProject = useCallback(async (id: string) => {
     setProjectLoading(true);
-    clearTimers();
+    abortRef.current?.abort();
+    abortRef.current = null;
     setRunning(false);
     try {
       const [filesData, versionsData, messagesData] = await Promise.all([
@@ -189,57 +208,109 @@ export default function Home() {
     dragStart.current = null;
   };
 
-  const clearTimers = () => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-  };
-
-  const startSimulation = useCallback((announce = false) => {
-    clearTimers();
-    setRunning(true);
-    setSteps(INITIAL_STEPS.map((s) =>
-      s.id === "routing" || s.id === "snapshot" || s.id === "kicad" ? { ...s, status: "pending" as const, detail: s.id === "routing" ? "En attente" : s.detail } : s
-    ));
-    if (announce) setMessages((m) => [...m, { role: "agent", text: SIM_MESSAGES[0] }]);
-
-    const at = (ms: number, fn: () => void) => timers.current.push(setTimeout(fn, ms));
-    at(900, () => setMessages((m) => [...m, { role: "agent", text: SIM_MESSAGES[1] }]));
-    at(1400, () => setSteps((prev) => prev.map((s) => s.id === "routing" ? { ...s, status: "running", detail: "Routage des pistes en cours…" } : s)));
-    at(1600, () => setMessages((m) => [...m, { role: "agent", text: SIM_MESSAGES[2] }]));
-    at(4200, () => setSteps((prev) => prev.map((s) =>
-      s.id === "routing" ? { ...s, status: "done", detail: "0 net non connecté" } :
-      s.id === "snapshot" ? { ...s, status: "running", detail: "Analyse du snapshot…" } : s
-    )));
-    at(5800, () => setSteps((prev) => prev.map((s) =>
-      s.id === "snapshot" ? { ...s, status: "done", detail: "Orientation connecteurs et découplages conformes" } :
-      s.id === "kicad" ? { ...s, status: "running", detail: "DRC KiCad dans le worker…" } : s
-    )));
-    at(7600, () => {
-      setSteps((prev) => prev.map((s) => s.id === "kicad" ? { ...s, status: "done", detail: "DRC propre · 0 violation bloquante" } : s));
-      setMessages((m) => [...m, { role: "agent", text: "Terminé : routage vérifié (0 net non connecté) et DRC KiCad propre. La revue finale est disponible dans l'onglet Validation." }]);
-      setRunning(false);
-    });
-  }, []);
-
+  const messagesRef = useRef(messages);
   useEffect(() => {
-    const t = setTimeout(() => { if (planApproved) startSimulation(true); }, 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planApproved]);
+    messagesRef.current = messages;
+  }, [messages]);
 
-  useEffect(() => clearTimers, []);
+  // --- Run agent réel (issue #4) : POST /api/chat en streaming ---
+  const refreshProjectState = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const [filesData, list] = await Promise.all([
+        api<{ files: Record<string, string> }>(`/api/projects/${projectId}/files`),
+        api<{ versions: VersionSummary[] }>(`/api/projects/${projectId}/versions`),
+      ]);
+      setFsMap(filesData.files);
+      setVersions(list.versions);
+      await refreshProjects();
+    } catch {
+      // Repli : la preview garde le dernier état connu.
+    }
+  }, [projectId, refreshProjects]);
+
+  const runChat = useCallback(async (text: string) => {
+    if (!projectId || running) return;
+    const choice = MODEL_VALUE_FOR_LABEL[model] ?? "meta-spark";
+    setRunning(true);
+    setRunCost(null);
+    runIdRef.current = null;
+    setSteps([]);
+    const history: ChatMsg[] = [...messagesRef.current, { role: "user", text }];
+    setMessages([...history, { role: "agent", text: "" }]);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const { runId } = await streamChat({
+        messages: history,
+        model: choice,
+        projectId,
+        clientBoard: boardRef.current,
+        signal: ctrl.signal,
+        cb: {
+          onText: (full) =>
+            setMessages((m) => {
+              const next = [...m];
+              next[next.length - 1] = { role: "agent", text: full };
+              return next;
+            }),
+          onToolStart: (name, id) =>
+            setSteps((prev) => [
+              ...prev.filter((s) => s.id !== `t-${id}`),
+              { id: `t-${id}`, label: TOOL_STEP_LABELS[name] ?? name, status: "running", detail: name },
+            ]),
+          onToolEnd: (name, ok, detail) =>
+            setSteps((prev) =>
+              prev.map((s) =>
+                s.detail === name && s.status === "running"
+                  ? { ...s, status: ok ? ("done" as const) : ("error" as const), detail: detail || name }
+                  : s
+              )
+            ),
+          onError: (message) =>
+            setMessages((m) => [...m, { role: "agent", text: `Erreur de stream : ${message}` }]),
+        },
+      });
+      if (runId) {
+        runIdRef.current = runId;
+        try {
+          const st = await api<{ run: { costUsd: number; maxCostUsd: number } }>(`/api/chat/${runId}`);
+          setRunCost({ cost: st.run.costUsd, max: st.run.maxCostUsd });
+        } catch {
+          // Coût indisponible : non bloquant.
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        const message = err instanceof Error ? err.message : String(err);
+        setMessages((m) => {
+          const next = [...m];
+          const last = next[next.length - 1];
+          if (last.role === "agent" && last.text === "") {
+            next[next.length - 1] = { role: "agent", text: `Run échoué : ${message}` };
+          } else {
+            next.push({ role: "agent", text: `Run échoué : ${message}` });
+          }
+          return next;
+        });
+      }
+    } finally {
+      abortRef.current = null;
+      setRunning(false);
+      await refreshProjectState();
+    }
+  }, [projectId, running, model, refreshProjectState]);
 
   const handleSend = (text: string) => {
-    setMessages((m) => [...m, { role: "user", text }]);
     if (!planApproved) {
       setPlanApproved(true);
-      return;
     }
-    timers.current.push(setTimeout(() => startSimulation(true), 400));
+    void runChat(text);
   };
 
   const handleStop = () => {
-    clearTimers();
+    abortRef.current?.abort();
+    abortRef.current = null;
     setRunning(false);
     setSteps((prev) => prev.map((s) => s.status === "running" ? { ...s, status: "pending", detail: "Interrompu par l'utilisateur" } : s));
     setMessages((m) => [...m, { role: "agent", text: "Run arrêté. La dernière version valide est conservée — dites-moi comment continuer." }]);
@@ -267,9 +338,10 @@ export default function Home() {
           onApprovePlan={() => setPlanApproved(true)}
           onSend={handleSend}
           onStop={handleStop}
-          onContinue={() => startSimulation(true)}
+          onContinue={() => void runChat("Continue l'itération avec le même contexte projet.")}
           model={model}
           onModelChange={setModel}
+          runCost={runCost}
           style={{ "--agent-w": `${leftW}px` } as CSSProperties}
         />
         <div
@@ -285,7 +357,13 @@ export default function Home() {
         >
           <div className="w-px bg-border" />
         </div>
-        <PreviewPanel fsMap={fsMap} versionLabel={currentVersionNo ? `v${currentVersionNo}` : "…"} />
+        <PreviewPanel
+          fsMap={fsMap}
+          versionLabel={currentVersionNo ? `v${currentVersionNo}` : "…"}
+          onBoardState={(s) => {
+            boardRef.current = s;
+          }}
+        />
       </main>
     </div>
   );

@@ -42,11 +42,14 @@ const FSMAP_FOR_SEL: Record<CircuitSel, Record<string, string>> = {
 export function PreviewPanel({
   fsMap,
   versionLabel,
+  onBoardState,
 }: {
   /** Copie de travail du projet (null pendant le chargement). */
   fsMap: Record<string, string> | null;
   /** Label affiché dans le pied de page, ex. "v3". */
   versionLabel: string;
+  /** Remonte l'état évalué au run agent (outil snapshotBoard). */
+  onBoardState?: (s: { components: number; traces: number; errors: string[]; evaluatedAt: string }) => void;
 }) {
   // Deep-link : #pcb, #schematic, #3d, #bom, #validation (pratique pour
   // partager une vue et pour les captures de contrôle). Appliqué après
@@ -97,6 +100,24 @@ export function PreviewPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel, fsMap]);
+
+  // Remontée au run agent : l'outil serveur `snapshotBoard` reprend ce dernier
+  // état évalué par le navigateur (preview live).
+  const errorMessages = [
+    ...(fatal ? [fatal] : []),
+    ...runErrors,
+    ...(summary?.errors.map((e) => e.message) ?? []),
+  ];
+  useEffect(() => {
+    if (evaluating || !summary) return;
+    onBoardState?.({
+      components: summary.components,
+      traces: summary.traces,
+      errors: errorMessages.slice(0, 20),
+      evaluatedAt: new Date().toISOString(),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evaluating, summary]);
 
   const handleCircuitJson = useCallback((json: unknown) => {
     setSummary(summarizeCircuitJson(json));

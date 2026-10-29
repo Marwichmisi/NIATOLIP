@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // circuit-json-to-altium est publié en sources TS (pas de dist).
   transpilePackages: ["circuit-json-to-altium"],
+  // @tscircuit/eval en require() natif côté serveur : bundlé, le
+  // CircuitRunner lève "Cannot read properties of undefined" (issue #4).
+  // Le client (WebWorker via blob URL) reste bundlé normalement.
+  serverExternalPackages: ["@tscircuit/eval", "@tscircuit/core"],
   // Turbopack stable (Next 16) : `experimental.turbo` est ignoré.
   turbopack: {
     resolveAlias: {

@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { INITIAL_STEPS, SUGGESTIONS, type AgentStep } from "@/data/mock";
+import { SUGGESTIONS, type AgentStep } from "@/data/mock";
 import { cn } from "@/lib/utils";
 
 export const MODELS = ["Meta · Spark 1.3", "Meta · Wonder 1.0", "OpenAI"];
@@ -29,7 +29,7 @@ function StepIcon({ status }: { status: AgentStep["status"] }) {
 
 export function AgentPanel({
   steps, running, messages, planApproved, onApprovePlan, onSend, onStop, onContinue,
-  model, onModelChange, style,
+  model, onModelChange, runCost, style,
 }: {
   steps: AgentStep[];
   running: boolean;
@@ -41,6 +41,7 @@ export function AgentPanel({
   onContinue: () => void;
   model: string;
   onModelChange: (model: string) => void;
+  runCost: { cost: number; max: number } | null;
   style?: CSSProperties;
 }) {
   const [input, setInput] = useState("");
@@ -74,7 +75,7 @@ export function AgentPanel({
           <span>50 max</span>
         </div>
         <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${(doneCount / steps.length) * 100}%` }} />
+          <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${steps.length === 0 ? 0 : (doneCount / steps.length) * 100}%` }} />
         </div>
       </div>
 
@@ -162,7 +163,12 @@ export function AgentPanel({
           )}
         </div>
         <p className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span>L&apos;agent vérifie chaque étape — aucun export sans votre approbation.</span>
+          <span>
+            L&apos;agent vérifie chaque étape — aucun export sans votre approbation.
+            {runCost && (
+              <> Coût dernier run : ${runCost.cost.toFixed(3)} / ${runCost.max.toFixed(0)}.</>
+            )}
+          </span>
           <span className="flex shrink-0 items-center gap-1.5">
             <label className="sr-only" htmlFor="model-select">Modèle</label>
             <select
