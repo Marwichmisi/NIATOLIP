@@ -5,8 +5,30 @@ import { useTheme } from "next-themes";
 import { CircuitBoard, Download, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ProjectControls } from "@/components/project-controls";
+import type { ProjectSummary, VersionSummary } from "@/lib/projects-client";
 
-export function TopBar() {
+export function TopBar({
+  projects,
+  currentId,
+  versions,
+  currentVersionNo,
+  loading,
+  onSelectProject,
+  onCreateProject,
+  onRestoreVersion,
+  onSnapshot,
+}: {
+  projects: ProjectSummary[];
+  currentId: string | null;
+  versions: VersionSummary[];
+  currentVersionNo: number | null;
+  loading: boolean;
+  onSelectProject: (id: string) => void;
+  onCreateProject: (name: string) => void;
+  onRestoreVersion: (versionId: string) => void;
+  onSnapshot: () => void;
+}) {
   const { theme, setTheme } = useTheme();
   // next-themes ne connaît le thème que côté client : sans ce garde, le
   // serveur et le client rendent une icône/titre différents → erreur
@@ -28,10 +50,17 @@ export function TopBar() {
 
       <div className="mx-2 h-6 w-px bg-border" />
 
-      <div className="min-w-0 leading-tight">
-        <p className="truncate text-sm font-medium">Sensor Node — ESP32-C3</p>
-        <p className="text-[11px] text-muted-foreground">v12 · sauvegardé à l'instant</p>
-      </div>
+      <ProjectControls
+        projects={projects}
+        currentId={currentId}
+        versions={versions}
+        currentVersionNo={currentVersionNo}
+        disabled={loading}
+        onSelectProject={onSelectProject}
+        onCreateProject={onCreateProject}
+        onRestoreVersion={onRestoreVersion}
+        onSnapshot={onSnapshot}
+      />
 
       <Badge variant="success" className="ml-1 hidden sm:inline-flex">Checks OK</Badge>
 

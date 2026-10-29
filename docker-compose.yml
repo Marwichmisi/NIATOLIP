@@ -1,0 +1,38 @@
+# NIATOLIP — composition M1 (issue #3) : `web` + `db`.
+# Lancement sur poste vierge : `docker compose up --build` (décision D11).
+# Prérequis unique : Docker. Le worker KiCad s'ajoutera ici en M2 (issue #7).
+name: niatolip
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-niatolip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-niatolip-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-niatolip}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-niatolip}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-niatolip}:${POSTGRES_PASSWORD:-niatolip-dev}@db:5432/${POSTGRES_DB:-niatolip}}
+      PORT: "3000"
+
+volumes:
+  pgdata:

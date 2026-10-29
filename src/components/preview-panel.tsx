@@ -39,7 +39,15 @@ const FSMAP_FOR_SEL: Record<CircuitSel, Record<string, string>> = {
   broken: TOY_FSMAP_BROKEN,
 };
 
-export function PreviewPanel() {
+export function PreviewPanel({
+  fsMap,
+  versionLabel,
+}: {
+  /** Copie de travail du projet (null pendant le chargement). */
+  fsMap: Record<string, string> | null;
+  /** Label affiché dans le pied de page, ex. "v3". */
+  versionLabel: string;
+}) {
   // Deep-link : #pcb, #schematic, #3d, #bom, #validation (pratique pour
   // partager une vue et pour les captures de contrôle). Appliqué après
   // hydratation uniquement : le SSR pré-rend toujours "pcb", et une valeur
@@ -55,6 +63,11 @@ export function PreviewPanel() {
     return () => window.removeEventListener("hashchange", fromHash);
   }, []);
   const [sel, setSel] = useState<CircuitSel>("good");
+  // Démo M0-2 : forcer la variante fautive par-dessus les fichiers projet.
+  // "good" = fichiers du projet (ou jouet en repli), "broken" = casse volontaire.
+  const projectFsMap = fsMap && Object.keys(fsMap).length > 0 ? fsMap : TOY_FSMAP_GOOD;
+  const activeFsMap = sel === "broken" ? TOY_FSMAP_BROKEN : projectFsMap;
+  const entrypoint = TOY_ENTRYPOINT in activeFsMap ? TOY_ENTRYPOINT : Object.keys(activeFsMap).sort()[0];
   const [summary, setSummary] = useState<CircuitSummary | null>(null);
   const [circuitJson, setCircuitJson] = useState<CircuitElement[]>([]);
   const [runErrors, setRunErrors] = useState<string[]>([]);
@@ -66,7 +79,7 @@ export function PreviewPanel() {
   useEffect(() => {
     let cancelled = false;
     setEvaluating(true);
-    runEvaluation(FSMAP_FOR_SEL[sel], TOY_ENTRYPOINT)
+    runEvaluation(activeFsMap, entrypoint)
       .then(({ summary, circuitJson }) => {
         if (cancelled) return;
         setSummary(summary);
@@ -82,7 +95,8 @@ export function PreviewPanel() {
     return () => {
       cancelled = true;
     };
-  }, [sel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, fsMap]);
 
   const handleCircuitJson = useCallback((json: unknown) => {
     setSummary(summarizeCircuitJson(json));
@@ -161,8 +175,8 @@ export function PreviewPanel() {
             <div className="preview-canvas min-h-0 w-full flex-1">
               <TscircuitPreview
                 view={view}
-                fsMap={FSMAP_FOR_SEL[sel]}
-                entrypoint={TOY_ENTRYPOINT}
+                fsMap={activeFsMap}
+                entrypoint={entrypoint}
                 evalVersion={TSCIRCUIT_VERSIONS.eval}
                 circuitJson={circuitJson}
                 evaluating={evaluating}
@@ -174,9 +188,11 @@ export function PreviewPanel() {
             <p className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background/85 px-3 py-1 text-center text-[11px] whitespace-nowrap text-muted-foreground backdrop-blur">
               {sel === "broken"
                 ? "Circuit volontairement fautif — les erreurs doivent s'afficher dans Validation"
-                : evaluating
-                  ? "Évaluation tscircuit en cours dans le WebWorker…"
-                  : `Carte jouet ESP32-C3 · ${summary?.components ?? 0} composants · ${summary?.traces ?? 0} traces`}
+                : fsMap === null
+                  ? "Chargement du projet…"
+                  : evaluating
+                    ? "Évaluation tscircuit en cours dans le WebWorker…"
+                    : `${entrypoint} · ${summary?.components ?? 0} composants · ${summary?.traces ?? 0} traces`}
             </p>
           </div>
         )}
@@ -284,7 +300,8 @@ export function PreviewPanel() {
       </div>
 
       <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-        <span className="font-mono">main.tsx</span>
+        <span className="font-mono">{entrypoint}</span>
+        <span className="font-mono">{versionLabel}</span>
         <span className="flex items-center gap-1">
           {evaluating ? <Loader2 className="h-3 w-3 animate-spin text-primary" /> : evalOk ? <Check className="h-3 w-3 text-emerald-500" /> : <span className="h-2 w-2 rounded-full bg-destructive" />}
           Évaluation {evaluating ? "…" : evalOk ? "OK" : "en erreur"}
@@ -292,7 +309,7 @@ export function PreviewPanel() {
         <span className="font-mono">
           tscircuit {TSCIRCUIT_VERSIONS.tscircuit} · eval {TSCIRCUIT_VERSIONS.eval} · runframe {TSCIRCUIT_VERSIONS.runframe}
         </span>
-        <span className="ml-auto">Preview réelle — circuit jouet ESP32-C3 + LED + bouton</span>
+        <span className="ml-auto">Preview réelle — fichiers du projet courant</span>
       </footer>
     </section>
   );

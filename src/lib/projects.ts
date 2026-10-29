@@ -1,0 +1,591 @@
+// Persistance projets/versions/messages (issue #3, doc 07).
+// - Backend Postgres quand DATABASE_URL est posée (Docker Compose).
+// - Sinon backend fichiers JSON locaux (<PROJECTS_DIR>/<id>.json),
+//   « version locale acceptable » (doc 01 §3.5, M1-1).
+// Mono-utilisateur local : user_id fixe "local", table users préparée
+// mais inactive (décision D12, activation en M3).
+// Serveur uniquement.
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { getPool, initSchema, isPgConfigured } from "@/lib/db";
+import type { PoolClient } from "@/lib/db";
+import { TOY_FSMAP_GOOD } from "@/lib/toy-circuit";
+
+if (typeof window !== "undefined") {
+  throw new Error("projects.ts est serveur-uniquement.");
+}
+
+export const LOCAL_USER_ID = "local";
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  current_version_id: string | null;
+  current_version_no: number | null;
+}
+
+export interface VersionSummary {
+  id: string;
+  version_no: number;
+  label: string;
+  created_at: string;
+  file_count: number;
+}
+
+export interface ChatHistoryMsg {
+  role: "user" | "agent";
+  text: string;
+  created_at: string;
+}
+
+const MAX_FILES = 50;
+const MAX_FILE_BYTES = 200_000;
+const MAX_NAME = 80;
+const MAX_TEXT = 20_000;
+const MAX_HISTORY = 300;
+const PATH_RE = /^[A-Za-z0-9._/-]{1,120}$/;
+
+function err(code: string, message: string, status = 400): never {
+  const e = new Error(message) as Error & { code: string; status: number };
+  e.code = code;
+  e.status = status;
+  throw e;
+}
+
+export function validateName(name: unknown): string {
+  if (typeof name !== "string" || name.trim().length === 0) err("invalid_name", "Nom de projet vide.");
+  const clean = name.trim().slice(0, MAX_NAME);
+  if (clean.length === 0) err("invalid_name", "Nom de projet vide.");
+  return clean;
+}
+
+export function validateFiles(input: unknown): Record<string, string> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    err("invalid_files", "files doit être un objet { chemin: contenu }.");
+  }
+  const files = input as Record<string, unknown>;
+  const entries = Object.entries(files);
+  if (entries.length === 0) err("invalid_files", "files vide : un projet a au moins un fichier.");
+  if (entries.length > MAX_FILES) err("invalid_files", `Trop de fichiers (max ${MAX_FILES}).`);
+  const out: Record<string, string> = {};
+  for (const [p, c] of entries) {
+    if (!PATH_RE.test(p) || p.includes("..")) err("invalid_files", `Chemin invalide : ${p}.`);
+    if (typeof c !== "string") err("invalid_files", `Contenu non texte : ${p}.`);
+    if (Buffer.byteLength(c, "utf8") > MAX_FILE_BYTES) {
+      err("invalid_files", `Fichier trop gros : ${p} (max ${MAX_FILE_BYTES} o).`);
+    }
+    out[p] = c;
+  }
+  return out;
+}
+
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function projectsDir(): string {
+  return process.env.PROJECTS_DIR ?? path.join(process.cwd(), "projects");
+}
+
+function filePath(id: string): string {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(id)) err("not_found", "Projet introuvable.", 404);
+  return path.join(projectsDir(), `${id}.json`);
+}
+
+interface FileProjectDoc {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  current_version_id: string | null;
+  working_files: Record<string, string>;
+  versions: Array<{
+    id: string;
+    version_no: number;
+    label: string;
+    created_from_run_id: string | null;
+    created_at: string;
+    files: Record<string, string>;
+  }>;
+  conversation: ChatHistoryMsg[];
+}
+
+async function readDoc(id: string): Promise<FileProjectDoc> {
+  try {
+    const raw = await fs.readFile(filePath(id), "utf8");
+    return JSON.parse(raw) as FileProjectDoc;
+  } catch {
+    err("not_found", "Projet introuvable.", 404);
+  }
+}
+
+async function writeDoc(doc: FileProjectDoc): Promise<void> {
+  const dir = projectsDir();
+  await fs.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${doc.id}.tmp`);
+  await fs.writeFile(tmp, JSON.stringify(doc), "utf8");
+  await fs.rename(tmp, filePath(doc.id));
+}
+
+const now = () => new Date().toISOString();
+
+function toSummaryPg(row: {
+  id: string; name: string; created_at: Date | string; updated_at: Date | string;
+  current_version_id: string | null; current_version_no: number | null;
+}): ProjectSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    created_at: new Date(row.created_at).toISOString(),
+    updated_at: new Date(row.updated_at).toISOString(),
+    current_version_id: row.current_version_id,
+    current_version_no: row.current_version_no,
+  };
+}
+
+// ---------- Backend Postgres ----------
+
+async function pgList(): Promise<ProjectSummary[]> {
+  await initSchema();
+  const { rows } = await getPool().query(
+    `select p.id, p.name, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
+     from projects p left join project_versions v on v.id = p.current_version_id
+     where p.user_id = $1 order by p.updated_at desc`,
+    [LOCAL_USER_ID]
+  );
+  return rows.map(toSummaryPg);
+}
+
+async function pgCreate(name: string): Promise<ProjectSummary> {
+  await initSchema();
+  const id = randomUUID();
+  const t = now();
+  const seed = { ...TOY_FSMAP_GOOD };
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      "insert into projects(id, user_id, name, working_files) values($1,$2,$3,$4)",
+      [id, LOCAL_USER_ID, name, JSON.stringify(seed)]
+    );
+    const versionId = randomUUID();
+    await client.query(
+      "insert into project_versions(id, project_id, version_no, label) values($1,$2,1,'création')",
+      [versionId, id]
+    );
+    for (const [p, c] of Object.entries(seed)) {
+      await client.query(
+        "insert into project_files(version_id, path, content, content_hash) values($1,$2,$3,$4)",
+        [versionId, p, c, hashContent(c)]
+      );
+    }
+    await client.query("update projects set current_version_id=$1, updated_at=$2 where id=$3", [
+      versionId, t, id,
+    ]);
+    await client.query("insert into conversations(id, project_id) values($1,$2)", [randomUUID(), id]);
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+  return { id, name, created_at: t, updated_at: t, current_version_id: null, current_version_no: 1 };
+}
+
+async function pgGet(id: string): Promise<ProjectSummary> {
+  await initSchema();
+  const { rows } = await getPool().query(
+    `select p.id, p.name, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
+     from projects p left join project_versions v on v.id = p.current_version_id
+     where p.id=$1 and p.user_id=$2`,
+    [id, LOCAL_USER_ID]
+  );
+  if (rows.length === 0) err("not_found", "Projet introuvable.", 404);
+  return toSummaryPg(rows[0]);
+}
+
+async function pgRename(id: string, name: string): Promise<ProjectSummary> {
+  await initSchema();
+  const { rowCount } = await getPool().query(
+    "update projects set name=$1, updated_at=now() where id=$2 and user_id=$3",
+    [name, id, LOCAL_USER_ID]
+  );
+  if (rowCount === 0) err("not_found", "Projet introuvable.", 404);
+  return pgGet(id);
+}
+
+async function pgDelete(id: string): Promise<void> {
+  await initSchema();
+  const { rowCount } = await getPool().query("delete from projects where id=$1 and user_id=$2", [
+    id, LOCAL_USER_ID,
+  ]);
+  if (rowCount === 0) err("not_found", "Projet introuvable.", 404);
+}
+
+async function pgGetFiles(id: string): Promise<Record<string, string>> {
+  await initSchema();
+  const { rows } = await getPool().query(
+    "select working_files from projects where id=$1 and user_id=$2", [id, LOCAL_USER_ID]
+  );
+  if (rows.length === 0) err("not_found", "Projet introuvable.", 404);
+  return (rows[0].working_files ?? {}) as Record<string, string>;
+}
+
+async function pgPutFiles(id: string, files: Record<string, string>): Promise<void> {
+  await initSchema();
+  const { rowCount } = await getPool().query(
+    "update projects set working_files=$1, updated_at=now() where id=$2 and user_id=$3",
+    [JSON.stringify(files), id, LOCAL_USER_ID]
+  );
+  if (rowCount === 0) err("not_found", "Projet introuvable.", 404);
+}
+
+async function pgVersions(id: string): Promise<VersionSummary[]> {
+  await initSchema();
+  await pgGet(id);
+  const { rows } = await getPool().query(
+    `select v.id, v.version_no, v.label, v.created_at, count(f.path)::int as file_count
+     from project_versions v left join project_files f on f.version_id = v.id
+     where v.project_id=$1 group by v.id order by v.version_no desc`,
+    [id]
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    version_no: r.version_no as number,
+    label: r.label as string,
+    created_at: new Date(r.created_at).toISOString(),
+    file_count: r.file_count as number,
+  }));
+}
+
+async function snapshot(
+  client: PoolClient,
+  projectId: string,
+  files: Record<string, string>,
+  label: string
+): Promise<{ versionId: string; versionNo: number }> {
+  const next = await client.query("select coalesce(max(version_no),0)+1 as version_no from project_versions where project_id=$1", [
+    projectId,
+  ]);
+  const versionNo = (next.rows[0] as unknown as { version_no: number }).version_no;
+  const versionId = randomUUID();
+  await client.query(
+    "insert into project_versions(id, project_id, version_no, label) values($1,$2,$3,$4)",
+    [versionId, projectId, versionNo, label]
+  );
+  for (const [p, c] of Object.entries(files)) {
+    await client.query(
+      "insert into project_files(version_id, path, content, content_hash) values($1,$2,$3,$4)",
+      [versionId, p, c, hashContent(c)]
+    );
+  }
+  await client.query(
+    "update projects set current_version_id=$1, updated_at=now() where id=$2",
+    [versionId, projectId]
+  );
+  return { versionId, versionNo };
+}
+
+async function pgCreateVersion(id: string, label?: string): Promise<VersionSummary> {
+  await initSchema();
+  const files = await pgGetFiles(id);
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const { versionId, versionNo } = await snapshot(
+      client, id, files, label?.slice(0, 120) || `v${Date.now()}`
+    );
+    await client.query("commit");
+    void versionId;
+    const list = await pgVersions(id);
+    return list.find((v) => v.version_no === versionNo)!;
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function pgRestore(id: string, versionId: string, label?: string): Promise<VersionSummary> {
+  await initSchema();
+  await pgGet(id);
+  const { rows } = await getPool().query(
+    "select path, content from project_files where version_id=$1 and exists(select 1 from project_versions where id=$1 and project_id=$2)",
+    [versionId, id]
+  );
+  if (rows.length === 0) err("not_found", "Version introuvable.", 404);
+  const files: Record<string, string> = {};
+  for (const r of rows) files[r.path as string] = r.content as string;
+  await pgPutFiles(id, files);
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const src = await client.query("select version_no from project_versions where id=$1", [versionId]);
+    const srcNo = (src.rows[0] as unknown as { version_no: number }).version_no;
+    const { versionNo } = await snapshot(
+      client, id, files, label?.slice(0, 120) || `restauration depuis v${srcNo}`
+    );
+    await client.query("commit");
+    const list = await pgVersions(id);
+    return list.find((v) => v.version_no === versionNo)!;
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function pgConvId(projectId: string): Promise<string> {
+  const { rows } = await getPool().query("select id from conversations where project_id=$1 limit 1", [
+    projectId,
+  ]);
+  if (rows.length > 0) return rows[0].id as string;
+  const cid = randomUUID();
+  await getPool().query("insert into conversations(id, project_id) values($1,$2)", [cid, projectId]);
+  return cid;
+}
+
+async function pgMessages(id: string): Promise<ChatHistoryMsg[]> {
+  await initSchema();
+  await pgGet(id);
+  const cid = await pgConvId(id);
+  const { rows } = await getPool().query(
+    "select role, ui_message_json, created_at from messages where conversation_id=$1 order by created_at asc, id asc limit $2",
+    [cid, MAX_HISTORY]
+  );
+  return rows.map((r) => ({
+    role: r.role as "user" | "agent",
+    text: String((r.ui_message_json as { text?: unknown }).text ?? ""),
+    created_at: new Date(r.created_at).toISOString(),
+  }));
+}
+
+async function pgAppendMessages(id: string, msgs: Array<{ role: string; text: string }>): Promise<void> {
+  await initSchema();
+  await pgGet(id);
+  const cid = await pgConvId(id);
+  for (const m of msgs) {
+    if (m.role !== "user" && m.role !== "agent") err("invalid_message", "role doit être user|agent.");
+    if (typeof m.text !== "string" || m.text.length === 0 || m.text.length > MAX_TEXT) {
+      err("invalid_message", "text vide ou trop long (max 20000).");
+    }
+    await getPool().query("insert into messages(id, conversation_id, role, ui_message_json) values($1,$2,$3,$4)", [
+      randomUUID(), cid, m.role, JSON.stringify({ text: m.text }),
+    ]);
+  }
+}
+
+// ---------- Backend fichiers locaux ----------
+
+function docSummary(doc: FileProjectDoc): ProjectSummary {
+  const cur = doc.versions.find((v) => v.id === doc.current_version_id);
+  return {
+    id: doc.id,
+    name: doc.name,
+    created_at: doc.created_at,
+    updated_at: doc.updated_at,
+    current_version_id: doc.current_version_id,
+    current_version_no: cur?.version_no ?? null,
+  };
+}
+
+async function fileList(): Promise<ProjectSummary[]> {
+  await fs.mkdir(projectsDir(), { recursive: true });
+  const entries = await fs.readdir(projectsDir());
+  const docs: FileProjectDoc[] = [];
+  for (const e of entries) {
+    if (!e.endsWith(".json") || e.startsWith(".")) continue;
+    try {
+      const raw = await fs.readFile(path.join(projectsDir(), e), "utf8");
+      docs.push(JSON.parse(raw) as FileProjectDoc);
+    } catch {
+      // Fichier étranger ou corrompu : ignoré (jamais de crash de liste).
+    }
+  }
+  return docs
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
+    .map(docSummary);
+}
+
+async function fileCreate(name: string): Promise<ProjectSummary> {
+  const t = now();
+  const versionId = randomUUID();
+  const doc: FileProjectDoc = {
+    id: randomUUID(),
+    user_id: LOCAL_USER_ID,
+    name,
+    created_at: t,
+    updated_at: t,
+    current_version_id: versionId,
+    working_files: { ...TOY_FSMAP_GOOD },
+    versions: [
+      {
+        id: versionId,
+        version_no: 1,
+        label: "création",
+        created_from_run_id: null,
+        created_at: t,
+        files: { ...TOY_FSMAP_GOOD },
+      },
+    ],
+    conversation: [],
+  };
+  await writeDoc(doc);
+  return docSummary(doc);
+}
+
+async function fileSnapshot(doc: FileProjectDoc, label: string): Promise<VersionSummary> {
+  const versionNo = doc.versions.reduce((m, v) => Math.max(m, v.version_no), 0) + 1;
+  const v = {
+    id: randomUUID(),
+    version_no: versionNo,
+    label: label.slice(0, 120),
+    created_from_run_id: null as string | null,
+    created_at: now(),
+    files: { ...doc.working_files },
+  };
+  doc.versions.push(v);
+  doc.current_version_id = v.id;
+  doc.updated_at = now();
+  await writeDoc(doc);
+  return {
+    id: v.id,
+    version_no: v.version_no,
+    label: v.label,
+    created_at: v.created_at,
+    file_count: Object.keys(v.files).length,
+  };
+}
+
+// ---------- Façade (sélection du backend) ----------
+
+export function storageBackend(): "postgres" | "fichiers" {
+  return isPgConfigured() ? "postgres" : "fichiers";
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  return storageBackend() === "postgres" ? pgList() : fileList();
+}
+
+export async function createProject(name: string): Promise<ProjectSummary> {
+  const clean = validateName(name);
+  return storageBackend() === "postgres" ? pgCreate(clean) : fileCreate(clean);
+}
+
+export async function getProject(id: string): Promise<ProjectSummary> {
+  if (storageBackend() === "postgres") return pgGet(id);
+  return docSummary(await readDoc(id));
+}
+
+export async function renameProject(id: string, name: string): Promise<ProjectSummary> {
+  const clean = validateName(name);
+  if (storageBackend() === "postgres") return pgRename(id, clean);
+  const doc = await readDoc(id);
+  doc.name = clean;
+  doc.updated_at = now();
+  await writeDoc(doc);
+  return docSummary(doc);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  if (storageBackend() === "postgres") return pgDelete(id);
+  await readDoc(id);
+  await fs.unlink(filePath(id));
+}
+
+export async function getWorkingFiles(id: string): Promise<Record<string, string>> {
+  if (storageBackend() === "postgres") return pgGetFiles(id);
+  return { ...(await readDoc(id)).working_files };
+}
+
+export async function putWorkingFiles(id: string, files: Record<string, string>): Promise<void> {
+  const clean = validateFiles(files);
+  if (storageBackend() === "postgres") return pgPutFiles(id, clean);
+  const doc = await readDoc(id);
+  doc.working_files = clean;
+  doc.updated_at = now();
+  await writeDoc(doc);
+}
+
+export async function listVersions(id: string): Promise<VersionSummary[]> {
+  if (storageBackend() === "postgres") return pgVersions(id);
+  const doc = await readDoc(id);
+  return [...doc.versions]
+    .sort((a, b) => b.version_no - a.version_no)
+    .map((v) => ({
+      id: v.id,
+      version_no: v.version_no,
+      label: v.label,
+      created_at: v.created_at,
+      file_count: Object.keys(v.files).length,
+    }));
+}
+
+export async function createVersion(id: string, label?: string): Promise<VersionSummary> {
+  const cleanLabel =
+    typeof label === "string" && label.trim().length > 0 ? label.trim() : `v${Date.now()}`;
+  if (storageBackend() === "postgres") return pgCreateVersion(id, cleanLabel);
+  const doc = await readDoc(id);
+  return fileSnapshot(doc, cleanLabel);
+}
+
+export async function restoreVersion(
+  id: string,
+  versionId: string,
+  label?: string
+): Promise<VersionSummary> {
+  if (storageBackend() === "postgres") return pgRestore(id, versionId, label);
+  const doc = await readDoc(id);
+  const src = doc.versions.find((v) => v.id === versionId);
+  if (!src) err("not_found", "Version introuvable.", 404);
+  doc.working_files = { ...src.files };
+  const cleanLabel =
+    typeof label === "string" && label.trim().length > 0
+      ? label.trim()
+      : `restauration depuis v${src.version_no}`;
+  return fileSnapshot(doc, cleanLabel);
+}
+
+export async function getMessages(id: string): Promise<ChatHistoryMsg[]> {
+  if (storageBackend() === "postgres") return pgMessages(id);
+  return (await readDoc(id)).conversation.slice(-MAX_HISTORY);
+}
+
+export async function appendMessages(
+  id: string,
+  msgs: Array<{ role: string; text: string }>
+): Promise<void> {
+  for (const m of msgs) {
+    if (m.role !== "user" && m.role !== "agent") err("invalid_message", "role doit être user|agent.");
+    if (typeof m.text !== "string" || m.text.length === 0 || m.text.length > MAX_TEXT) {
+      err("invalid_message", "text vide ou trop long (max 20000).");
+    }
+  }
+  if (storageBackend() === "postgres") return pgAppendMessages(id, msgs);
+  const doc = await readDoc(id);
+  for (const m of msgs) {
+    doc.conversation.push({
+      role: m.role as "user" | "agent",
+      text: m.text,
+      created_at: now(),
+    });
+  }
+  doc.conversation = doc.conversation.slice(-MAX_HISTORY);
+  doc.updated_at = now();
+  await writeDoc(doc);
+}
+
+/** Erreur JSON structurée doc 07 : { error: { code, message } }. */
+export function toApiError(e: unknown): Response {
+  const code = (e as { code?: string })?.code ?? "internal";
+  const status = (e as { status?: number })?.status ?? 500;
+  const message = e instanceof Error ? e.message : "Erreur interne.";
+  return Response.json({ error: { code, message } }, { status });
+}

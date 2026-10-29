@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+projects
+artifacts
+.env
+.env*.local
+.git
+*.db
+*.sqlite
+npm-debug.log
