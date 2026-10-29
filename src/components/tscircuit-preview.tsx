@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 import { Cpu, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StaticPcbPreview } from "@/components/static-svg-preview";
+import type { CircuitElement } from "@/lib/tscircuit-eval";
 
 if (typeof window !== "undefined") {
   // Pas de télémétrie tscircuit vers l'extérieur.
@@ -39,6 +41,10 @@ interface TscircuitPreviewProps {
   entrypoint: string;
   /** Version d'eval épinglée (doc 01 §6 : jamais "latest" en production). */
   evalVersion?: string;
+  /** Notre propre évaluation tourne encore (le fallback SVG arrive). */
+  evaluating?: boolean;
+  /** Circuit JSON de notre propre évaluation — fallback statique sans GPU. */
+  circuitJson?: CircuitElement[];
   /** Circuit JSON émis par le WebWorker après chaque rendu — ne jamais l'afficher brut. */
   onCircuitJson?: (json: unknown) => void;
   onRunCompleted?: (info: RunCompletedInfo) => void;
@@ -75,6 +81,8 @@ export function TscircuitPreview({
   fsMap,
   entrypoint,
   evalVersion,
+  circuitJson,
+  evaluating,
   onCircuitJson,
   onRunCompleted,
   onError,
@@ -82,6 +90,12 @@ export function TscircuitPreview({
   const tab = TAB_FOR_VIEW[view];
   const key = useMemo(() => JSON.stringify(fsMap), [fsMap]);
   const needsWebGpu = view === "pcb" || view === "3d";
+  // "ready" = le run a abouti (succès ou échec) : tant qu'il est faux, un
+  // voile de chargement masque l'état vide de RunFrame (les "tips").
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+  }, [view, fsMap]);
   const [webGpu, setWebGpu] = useState<"checking" | "ok" | "missing">(
     needsWebGpu ? "checking" : "ok"
   );
@@ -112,6 +126,31 @@ export function TscircuitPreview({
   }, [needsWebGpu, view]);
 
   if (needsWebGpu && webGpu !== "ok") {
+    // PCB sans GPU : fallback statique dès que notre propre évaluation
+    // (WebWorker, sans GPU) a produit le Circuit JSON. 3D : message seul.
+    if (view === "pcb" && webGpu === "missing" && circuitJson && circuitJson.length > 0) {
+      return (
+        <div className="preview-canvas h-full w-full" key={`static-${key}`}>
+          <StaticPcbPreview circuitJson={circuitJson} />
+        </div>
+      );
+    }
+    // Évaluation en cours (notre worker) : voile d'attente, pas le message
+    // d'indisponibilité — le SVG statique arrive juste après.
+    if (webGpu === "missing" && evaluating) {
+      return (
+        <div className="preview-canvas flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          <div>
+            <p className="text-sm font-medium">Évaluation du circuit…</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
+              WebWorker tscircuit (premier chargement : moteur ~18 Mo, mis en
+              cache ensuite).
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
         {webGpu === "checking" ? (
@@ -142,7 +181,7 @@ export function TscircuitPreview({
   }
 
   return (
-    <div className="h-full w-full" key={`${view}-${key}`}>
+    <div className="relative h-full w-full" key={`${view}-${key}`}>
       <ErrorBoundary
         fallbackRender={({ error, resetErrorBoundary }) => (
           <PreviewFallback
@@ -161,11 +200,32 @@ export function TscircuitPreview({
           showRunButton={false}
           showFileMenu={false}
           showToggleFullScreen={false}
-          onCircuitJsonChange={(circuitJson: unknown) => onCircuitJson?.(circuitJson)}
-          onRunCompleted={(payload: RunCompletedInfo) => onRunCompleted?.(payload)}
-          onError={(error: Error) => onError?.(error)}
+          onCircuitJsonChange={(circuitJson: unknown) => {
+            setReady(true);
+            onCircuitJson?.(circuitJson);
+          }}
+          onRunCompleted={(payload: RunCompletedInfo) => {
+            setReady(true);
+            onRunCompleted?.(payload);
+          }}
+          onError={(error: Error) => {
+            setReady(true);
+            onError?.(error);
+          }}
         />
       </ErrorBoundary>
+      {!ready && (
+        <div className="preview-canvas absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          <div>
+            <p className="text-sm font-medium">Chargement de la preview…</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
+              Premier chargement : moteur tscircuit (~18 Mo, mis en cache
+              ensuite), puis évaluation dans le WebWorker.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

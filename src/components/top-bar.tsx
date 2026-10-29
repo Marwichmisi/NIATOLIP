@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { CircuitBoard, Download, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,12 @@ import { Badge } from "@/components/ui/badge";
 
 export function TopBar() {
   const { theme, setTheme } = useTheme();
+  // next-themes ne connaît le thème que côté client : sans ce garde, le
+  // serveur et le client rendent une icône/titre différents → erreur
+  // d'hydratation React #418 + re-rendu complet visible (layout qui saute).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const dark = mounted && theme === "dark";
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card/60 px-4">
       <div className="flex items-center gap-2.5">
@@ -32,11 +39,11 @@ export function TopBar() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          title={theme === "dark" ? "Passer en thème clair" : "Passer en thème sombre"}
+          onClick={() => setTheme(dark ? "light" : "dark")}
+          title={dark ? "Passer en thème clair" : "Passer en thème sombre"}
           aria-label="Basculer le thème"
         >
-          {theme === "dark" ? <Sun /> : <Moon />}
+          {dark ? <Sun /> : <Moon />}
         </Button>
 
         <Button size="sm" className="hidden sm:inline-flex">

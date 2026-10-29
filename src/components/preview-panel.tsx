@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Box, Bug, Check, CircuitBoard, Download, History, List, Loader2, Circle, Network, ShieldCheck,
 } from "lucide-react";
@@ -10,7 +10,7 @@ import { TscircuitPreview, type RunCompletedInfo, type TscircuitView } from "@/c
 import {
   TOY_ENTRYPOINT, TOY_FSMAP_BROKEN, TOY_FSMAP_GOOD, TSCIRCUIT_VERSIONS,
 } from "@/lib/toy-circuit";
-import { summarizeCircuitJson, type CircuitSummary } from "@/lib/tscircuit-eval";
+import { runEvaluation, summarizeCircuitJson, type CircuitElement, type CircuitSummary } from "@/lib/tscircuit-eval";
 import { BOM } from "@/data/mock";
 import { cn } from "@/lib/utils";
 
@@ -40,12 +40,49 @@ const FSMAP_FOR_SEL: Record<CircuitSel, Record<string, string>> = {
 };
 
 export function PreviewPanel() {
+  // Deep-link : #pcb, #schematic, #3d, #bom, #validation (pratique pour
+  // partager une vue et pour les captures de contrôle). Appliqué après
+  // hydratation uniquement : le SSR pré-rend toujours "pcb", et une valeur
+  // initiale différente côté client casserait l'hydratation (React #418).
   const [tab, setTab] = useState<TabId>("pcb");
+  useEffect(() => {
+    const fromHash = () => {
+      const h = window.location.hash.replace(/^#/, "");
+      if (TABS.some((t) => t.id === h)) setTab(h as TabId);
+    };
+    fromHash();
+    window.addEventListener("hashchange", fromHash);
+    return () => window.removeEventListener("hashchange", fromHash);
+  }, []);
   const [sel, setSel] = useState<CircuitSel>("good");
   const [summary, setSummary] = useState<CircuitSummary | null>(null);
+  const [circuitJson, setCircuitJson] = useState<CircuitElement[]>([]);
   const [runErrors, setRunErrors] = useState<string[]>([]);
   const [fatal, setFatal] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(true);
+
+  // Évaluation indépendante du viewer (WebWorker, pas de WebGPU requis) :
+  // alimente la validation et le fallback statique même sans GPU.
+  useEffect(() => {
+    let cancelled = false;
+    setEvaluating(true);
+    runEvaluation(FSMAP_FOR_SEL[sel], TOY_ENTRYPOINT)
+      .then(({ summary, circuitJson }) => {
+        if (cancelled) return;
+        setSummary(summary);
+        setCircuitJson(circuitJson);
+        setEvaluating(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setFatal(e instanceof Error ? e.message : String(e));
+        setCircuitJson([]);
+        setEvaluating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sel]);
 
   const handleCircuitJson = useCallback((json: unknown) => {
     setSummary(summarizeCircuitJson(json));
@@ -77,7 +114,9 @@ export function PreviewPanel() {
     ...(fatal ? [{ code: "exception", message: fatal }] : []),
     ...runErrors.map((message) => ({ code: "worker", message })),
     ...(summary?.errors ?? []),
-  ];
+  ].filter(
+    (e, i, arr) => arr.findIndex((x) => x.code === e.code && x.message === e.message) === i
+  );
   const evalOk = structuredErrors.length === 0 && summary !== null;
   const view = VIEW_FOR_TAB[tab];
 
@@ -89,7 +128,10 @@ export function PreviewPanel() {
             key={id}
             role="tab"
             aria-selected={tab === id}
-            onClick={() => setTab(id)}
+            onClick={() => {
+              setTab(id);
+              window.location.hash = id;
+            }}
             className={cn(
               "flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-[13px] font-medium transition-colors",
               tab === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
@@ -122,6 +164,8 @@ export function PreviewPanel() {
                 fsMap={FSMAP_FOR_SEL[sel]}
                 entrypoint={TOY_ENTRYPOINT}
                 evalVersion={TSCIRCUIT_VERSIONS.eval}
+                circuitJson={circuitJson}
+                evaluating={evaluating}
                 onCircuitJson={handleCircuitJson}
                 onRunCompleted={handleRunCompleted}
                 onError={handleError}

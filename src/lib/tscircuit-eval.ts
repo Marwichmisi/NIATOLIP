@@ -22,7 +22,7 @@ export interface CircuitSummary {
 }
 
 // Élément Circuit JSON minimal : on ne type que ce qu'on lit.
-interface CircuitElement {
+export interface CircuitElement {
   type: string;
   message?: string;
   error?: string;
@@ -82,31 +82,51 @@ function summarize(json: CircuitElement[], durationMs: number): CircuitSummary {
   };
 }
 
-export async function evaluateCircuit(
+/** Évaluation complète : résumé borné + Circuit JSON (pour les previews
+ *  statiques et les outils agent — ne jamais envoyer le JSON brut au modèle). */
+export async function runEvaluation(
   fsMap: Record<string, string>,
   entrypoint: string
-): Promise<CircuitSummary> {
+): Promise<{ summary: CircuitSummary; circuitJson: CircuitElement[] }> {
   const started = performance.now();
-  // Import dynamique : le worker n'existe que dans le navigateur.
   const { createCircuitWebWorker } = await import("@tscircuit/eval/worker");
-  const worker = await createCircuitWebWorker({});
+  // Version épinglée (pas de "latest") : identique à RunFrame, voir
+  // TSCIRCUIT_VERSIONS + overrides dans package.json.
+  const { TSCIRCUIT_VERSIONS } = await import("./toy-circuit");
+  const worker = await createCircuitWebWorker({
+    evalVersion: TSCIRCUIT_VERSIONS.eval,
+  });
 
   try {
     await worker.executeWithFsMap({ fsMap, entrypoint });
     await worker.renderUntilSettled();
     const json = await worker.getCircuitJson();
-    return summarizeCircuitJson(Array.isArray(json) ? json : [], Math.round(performance.now() - started));
+    const list = Array.isArray(json) ? (json as CircuitElement[]) : [];
+    return {
+      summary: summarizeCircuitJson(list, Math.round(performance.now() - started)),
+      circuitJson: list,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      elements: 0,
-      components: 0,
-      traces: 0,
-      errors: [{ kind: "exception", code: "exception", message }],
-      ok: false,
-      durationMs: Math.round(performance.now() - started),
+      summary: {
+        elements: 0,
+        components: 0,
+        traces: 0,
+        errors: [{ kind: "exception", code: "exception", message }],
+        ok: false,
+        durationMs: Math.round(performance.now() - started),
+      },
+      circuitJson: [],
     };
   } finally {
     await worker.kill().catch(() => {});
   }
+}
+
+export async function evaluateCircuit(
+  fsMap: Record<string, string>,
+  entrypoint: string
+): Promise<CircuitSummary> {
+  return (await runEvaluation(fsMap, entrypoint)).summary;
 }
