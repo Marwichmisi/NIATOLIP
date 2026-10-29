@@ -53,13 +53,11 @@ function summarize(json: CircuitElement[], durationMs: number): CircuitSummary {
 
   for (const el of json) {
     if (typeof el.type !== "string") continue;
-    if (el.type === "pcb_component" || el.type === "source_component") {
+    // On ne compte que les éléments sources (l'intention de conception).
+    // Les éléments pcb_*/schematic_* dérivés doubleraient les compteurs.
+    if (el.type === "source_component") {
       components += 1;
-    } else if (
-      el.type === "pcb_trace" ||
-      el.type === "schematic_trace" ||
-      el.type === "source_trace"
-    ) {
+    } else if (el.type === "source_trace") {
       traces += 1;
     } else if (el.type === "pcb_board") {
       board = {

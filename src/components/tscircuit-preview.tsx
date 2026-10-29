@@ -1,9 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
-import { Loader2, TriangleAlert } from "lucide-react";
+import { Cpu, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 if (typeof window !== "undefined") {
@@ -37,6 +37,8 @@ interface TscircuitPreviewProps {
   view: TscircuitView;
   fsMap: Record<string, string>;
   entrypoint: string;
+  /** Version d'eval épinglée (doc 01 §6 : jamais "latest" en production). */
+  evalVersion?: string;
   /** Circuit JSON émis par le WebWorker après chaque rendu — ne jamais l'afficher brut. */
   onCircuitJson?: (json: unknown) => void;
   onRunCompleted?: (info: RunCompletedInfo) => void;
@@ -72,12 +74,72 @@ export function TscircuitPreview({
   view,
   fsMap,
   entrypoint,
+  evalVersion,
   onCircuitJson,
   onRunCompleted,
   onError,
 }: TscircuitPreviewProps) {
   const tab = TAB_FOR_VIEW[view];
   const key = useMemo(() => JSON.stringify(fsMap), [fsMap]);
+  const needsWebGpu = view === "pcb" || view === "3d";
+  const [webGpu, setWebGpu] = useState<"checking" | "ok" | "missing">(
+    needsWebGpu ? "checking" : "ok"
+  );
+
+  useEffect(() => {
+    if (!needsWebGpu) {
+      setWebGpu("ok");
+      return;
+    }
+    setWebGpu("checking");
+    let cancelled = false;
+    const done = (v: "ok" | "missing") => {
+      if (!cancelled) setWebGpu(v);
+    };
+    (async () => {
+      try {
+        const gpu = (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
+        if (!gpu) return done("missing");
+        const adapter = await gpu.requestAdapter();
+        done(adapter ? "ok" : "missing");
+      } catch {
+        done("missing");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [needsWebGpu, view]);
+
+  if (needsWebGpu && webGpu !== "ok") {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+        {webGpu === "checking" ? (
+          <>
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Vérification WebGPU…</p>
+          </>
+        ) : (
+          <>
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <Cpu className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="font-display text-sm font-semibold">
+                Aperçu {view === "pcb" ? "PCB" : "3D"} indisponible
+              </p>
+              <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
+                Ce navigateur ne fournit pas d&apos;adaptateur WebGPU (requis par
+                le viewer tscircuit). Le schéma, la BOM et la validation restent
+                disponibles — essayez Chrome ou Edge récent avec accélération
+                matérielle.
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="h-full w-full" key={`${view}-${key}`}>
@@ -92,6 +154,8 @@ export function TscircuitPreview({
         <RunFrame
           fsMap={fsMap}
           entrypoint={entrypoint}
+          evalVersion={evalVersion}
+          shouldLoadLatestEval={false}
           defaultTab={tab}
           availableTabs={[tab]}
           showRunButton={false}

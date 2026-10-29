@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   ArrowUp, Check, ChevronDown, Circle, CircleAlert, Loader2, Pencil, Play, Square, X,
 } from "lucide-react";
@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { INITIAL_STEPS, SUGGESTIONS, type AgentStep } from "@/data/mock";
 import { cn } from "@/lib/utils";
+
+export const MODELS = ["Meta · Spark 1.3", "Meta · Wonder 1.0", "OpenAI"];
 
 export interface ChatMsg { role: "user" | "agent"; text: string }
 
@@ -20,6 +22,7 @@ function StepIcon({ status }: { status: AgentStep["status"] }) {
 
 export function AgentPanel({
   steps, running, messages, planApproved, onApprovePlan, onSend, onStop, onContinue,
+  model, onModelChange, style,
 }: {
   steps: AgentStep[];
   running: boolean;
@@ -29,6 +32,9 @@ export function AgentPanel({
   onSend: (text: string) => void;
   onStop: () => void;
   onContinue: () => void;
+  model: string;
+  onModelChange: (model: string) => void;
+  style?: CSSProperties;
 }) {
   const [input, setInput] = useState("");
   const [openStep, setOpenStep] = useState<string | null>(null);
@@ -43,7 +49,11 @@ export function AgentPanel({
   };
 
   return (
-    <section className="flex min-h-0 w-full flex-col border-r border-border bg-card/40 lg:w-[400px] lg:shrink-0" aria-label="Agent IA">
+    <section
+      className="flex min-h-0 w-full flex-col border-r border-border bg-card/40 lg:w-[var(--agent-w,400px)] lg:shrink-0"
+      style={style}
+      aria-label="Agent IA"
+    >
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <h2 className="font-display text-sm font-semibold tracking-tight">Agent</h2>
         <Badge variant={running ? "default" : finished ? "success" : "secondary"}>
@@ -144,7 +154,23 @@ export function AgentPanel({
             </Button>
           )}
         </div>
-        <p className="mt-2 text-center text-[10px] text-muted-foreground">L'agent vérifie chaque étape — aucun export sans votre approbation.</p>
+        <p className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+          <span>L&apos;agent vérifie chaque étape — aucun export sans votre approbation.</span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <label className="sr-only" htmlFor="model-select">Modèle</label>
+            <select
+              id="model-select"
+              value={model}
+              onChange={(e) => onModelChange(e.target.value)}
+              title="Modèle pour le prochain run"
+              className="h-7 rounded-md border border-input bg-background px-1.5 text-[11px] text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              {MODELS.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </span>
+        </p>
       </div>
     </section>
   );

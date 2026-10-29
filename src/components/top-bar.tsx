@@ -5,15 +5,7 @@ import { CircuitBoard, Download, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-const MODELS = ["Meta · Spark 1.3", "Meta · Wonder 1.0", "OpenAI"];
-
-export function TopBar({
-  model,
-  onModelChange,
-}: {
-  model: string;
-  onModelChange: (model: string) => void;
-}) {
+export function TopBar() {
   const { theme, setTheme } = useTheme();
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card/60 px-4">
@@ -37,18 +29,6 @@ export function TopBar({
       <Badge variant="success" className="ml-1 hidden sm:inline-flex">Checks OK</Badge>
 
       <div className="ml-auto flex items-center gap-2">
-        <label className="sr-only" htmlFor="model-select">Modèle</label>
-        <select
-          id="model-select"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-2.5 text-[13px] text-foreground outline-none focus:ring-2 focus:ring-ring"
-        >
-          {MODELS.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-
         <Button
           variant="ghost"
           size="icon"

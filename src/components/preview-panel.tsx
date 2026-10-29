@@ -121,6 +121,7 @@ export function PreviewPanel() {
                 view={view}
                 fsMap={FSMAP_FOR_SEL[sel]}
                 entrypoint={TOY_ENTRYPOINT}
+                evalVersion={TSCIRCUIT_VERSIONS.eval}
                 onCircuitJson={handleCircuitJson}
                 onRunCompleted={handleRunCompleted}
                 onError={handleError}

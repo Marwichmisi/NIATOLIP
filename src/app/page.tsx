@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { TopBar } from "@/components/top-bar";
 import { AgentPanel, type ChatMsg } from "@/components/agent-panel";
 import { PreviewPanel } from "@/components/preview-panel";
@@ -15,12 +15,30 @@ const SIM_MESSAGES = [
 export default function Home() {
   const [model, setModel] = useState("Meta · Spark 1.3");
   const [planApproved, setPlanApproved] = useState(false);
-  const [steps, setSteps] = useState<AgentStep[]>(INITIAL_STEPS);
-  const [messages, setMessages] = useState<ChatMsg[]>([
+  const [steps, setSteps] = useState<AgentStep[]>(INITIAL_STEPS);  const [messages, setMessages] = useState<ChatMsg[]>([
     { role: "agent", text: "Bonjour — décrivez la carte à créer, ou approuvez le plan proposé pour lancer la génération." },
   ]);
   const [running, setRunning] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Largeur du panneau agent (redimensionnable au M1 : voir divider ci-dessous).
+  const [leftW, setLeftW] = useState(400);
+  const dragStart = useRef<{ x: number; w: number } | null>(null);
+
+  const onDividerPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
+    dragStart.current = { x: e.clientX, w: leftW };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onDividerPointerMove = (e: RPointerEvent<HTMLDivElement>) => {
+    const start = dragStart.current;
+    if (!start) return;
+    const next = Math.min(640, Math.max(280, start.w + e.clientX - start.x));
+    setLeftW(next);
+  };
+
+  const onDividerPointerUp = () => {
+    dragStart.current = null;
+  };
 
   const clearTimers = () => {
     timers.current.forEach(clearTimeout);
@@ -80,7 +98,7 @@ export default function Home() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <TopBar model={model} onModelChange={setModel} />
+      <TopBar />
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <AgentPanel
           steps={steps}
@@ -91,7 +109,23 @@ export default function Home() {
           onSend={handleSend}
           onStop={handleStop}
           onContinue={() => startSimulation(true)}
+          model={model}
+          onModelChange={setModel}
+          style={{ "--agent-w": `${leftW}px` } as CSSProperties}
         />
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Redimensionner les panneaux"
+          title="Glisser pour redimensionner (double-clic pour réinitialiser)"
+          onPointerDown={onDividerPointerDown}
+          onPointerMove={onDividerPointerMove}
+          onPointerUp={onDividerPointerUp}
+          onDoubleClick={() => setLeftW(400)}
+          className="hidden shrink-0 cursor-col-resize touch-none items-stretch justify-center bg-transparent transition-colors hover:bg-primary/20 lg:flex"
+        >
+          <div className="w-px bg-border" />
+        </div>
         <PreviewPanel />
       </main>
     </div>
