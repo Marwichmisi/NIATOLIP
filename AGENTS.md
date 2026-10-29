@@ -22,6 +22,11 @@ npm run build   # seule vérification disponible : doit être vert avant commit
 ## Piège build critique
 
 - **Jamais `next/font/google`** : le téléchargement Google Fonts au build peut boucler indéfiniment (`socket hang up` constaté, build bloqué 1 h). Les polices sont auto-hébergées via `@fontsource-variable/*`, importées dans `src/app/layout.tsx` ; les familles sont définies dans `src/app/globals.css` (`--font-inter`, `--font-display`, `--font-mono`).
+- **`package.json` = JSON strict, sans commentaires** : un `//` casse toutes les commandes npm (`JSON.parse ... must be actual JSON`). Documenter les choix dans `AGENTS.md` ou les docs, pas dans le JSON.
+- **tscircuit publie en 0.0.x** (chaque mineur casse la compat) : `overrides` force une version unique de `@tscircuit/core`/`@tscircuit/eval` dans tout l'arbre, sinon RunFrame résout un core différent de celui du paquet `tscircuit` (doublons imbriqués → 439 erreurs `Module not found` au build). Ne jamais retirer ces `overrides` sans rebuilder.
+- RunFrame/Viewers : `@tscircuit/runframe` n'embarque que 5 dépendances — ses viewers (`pcb-viewer`, `schematic-viewer`, `3d-viewer`…), `cmdk`, les `@radix-ui/*` et une vingtaine d'autres sont en `devDependencies` upstream et doivent être installés comme dépendances directes. Leurs classes Tailwind sont déclarées via `@source` dans `globals.css` (sinon preview non stylée).
+- Build Next 16 = Turbopack uniquement : la clé de config est `turbopack` au premier niveau (`experimental.turbo` est ignoré en silence). Trois shims assumés pour le périmètre M0 (voir `src/lib/*-stub.ts`) : `resvg-stub.ts` (PNG natif `resvg-js`), `gltf-stub.ts` (`circuit-json-to-gltf` → occt WASM `?url` + resvg), `transpilePackages` pour `circuit-json-to-altium` (publié en `.ts` sans dist). Ne jamais exposer d'export PNG/STEP/GLB dans l'UI sans retirer le shim correspondant.
+- npm 11.12 ne sait pas installer les dépendances `github:`/`codeload` (bug pacote `--prefer-offline/--prefer-online`) : utiliser `npx -y npm@10.9.3 install …` pour celles-là uniquement.
 
 ## Conventions UI (décision D15, détail `docs/06-UX-SPEC.md`)
 

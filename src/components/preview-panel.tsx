@@ -1,13 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import {
-  Box, Check, CircuitBoard, Download, History, List, Loader2, Circle, Network, ShieldCheck,
+  Box, Bug, Check, CircuitBoard, Download, History, List, Loader2, Circle, Network, ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PcbBoard, SchematicPreview } from "@/components/pcb-board";
-import { BOM, GATES } from "@/data/mock";
+import { TscircuitPreview, type RunCompletedInfo, type TscircuitView } from "@/components/tscircuit-preview";
+import {
+  TOY_ENTRYPOINT, TOY_FSMAP_BROKEN, TOY_FSMAP_GOOD, TSCIRCUIT_VERSIONS,
+} from "@/lib/toy-circuit";
+import { summarizeCircuitJson, type CircuitSummary } from "@/lib/tscircuit-eval";
+import { BOM } from "@/data/mock";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -20,8 +24,62 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function PreviewPanel({ routed }: { routed: boolean }) {
+const VIEW_FOR_TAB: Record<string, TscircuitView | null> = {
+  pcb: "pcb",
+  schematic: "schematic",
+  "3d": "3d",
+  bom: null,
+  validation: null,
+};
+
+type CircuitSel = "good" | "broken";
+
+const FSMAP_FOR_SEL: Record<CircuitSel, Record<string, string>> = {
+  good: TOY_FSMAP_GOOD,
+  broken: TOY_FSMAP_BROKEN,
+};
+
+export function PreviewPanel() {
   const [tab, setTab] = useState<TabId>("pcb");
+  const [sel, setSel] = useState<CircuitSel>("good");
+  const [summary, setSummary] = useState<CircuitSummary | null>(null);
+  const [runErrors, setRunErrors] = useState<string[]>([]);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [evaluating, setEvaluating] = useState(true);
+
+  const handleCircuitJson = useCallback((json: unknown) => {
+    setSummary(summarizeCircuitJson(json));
+    setEvaluating(false);
+  }, []);
+
+  const handleRunCompleted = useCallback((info: RunCompletedInfo) => {
+    const messages = (info.errors ?? []).map((e) =>
+      typeof e === "string" ? e : e.message ?? e.type ?? "Erreur d'exécution"
+    );
+    setRunErrors(messages);
+    setEvaluating(false);
+  }, []);
+
+  const handleError = useCallback((error: Error) => {
+    setFatal(error.message);
+    setEvaluating(false);
+  }, []);
+
+  const switchSel = (next: CircuitSel) => {
+    setSel(next);
+    setSummary(null);
+    setRunErrors([]);
+    setFatal(null);
+    setEvaluating(true);
+  };
+
+  const structuredErrors = [
+    ...(fatal ? [{ code: "exception", message: fatal }] : []),
+    ...runErrors.map((message) => ({ code: "worker", message })),
+    ...(summary?.errors ?? []),
+  ];
+  const evalOk = structuredErrors.length === 0 && summary !== null;
+  const view = VIEW_FOR_TAB[tab];
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background" aria-label="Aperçu de la carte">
@@ -41,38 +99,40 @@ export function PreviewPanel({ routed }: { routed: boolean }) {
           </button>
         ))}
         <div className="ml-auto hidden items-center gap-1 pb-1 md:flex">
+          <Button
+            variant={sel === "broken" ? "default" : "ghost"}
+            size="icon-sm"
+            title="Provoquer une erreur (M0-2 : vérifie l'affichage structuré des erreurs)"
+            aria-label="Provoquer une erreur d'évaluation"
+            onClick={() => switchSel(sel === "broken" ? "good" : "broken")}
+          >
+            <Bug />
+          </Button>
           <Button variant="ghost" size="icon-sm" title="Historique des versions" aria-label="Historique des versions"><History /></Button>
           <Button variant="ghost" size="icon-sm" title="Télécharger le projet KiCad" aria-label="Télécharger le projet KiCad"><Download /></Button>
         </div>
       </div>
 
-      <div className={cn("relative min-h-0 flex-1", tab === "pcb" || tab === "schematic" ? "overflow-hidden" : "overflow-auto p-4")}>
-        {tab === "pcb" && (
+      <div className={cn("relative min-h-0 flex-1", view ? "overflow-hidden" : "overflow-auto p-4")}>
+        {view && (
           <div className="relative flex h-full w-full flex-col">
             <div className="preview-canvas min-h-0 w-full flex-1">
-              <PcbBoard routed={routed} />
+              <TscircuitPreview
+                view={view}
+                fsMap={FSMAP_FOR_SEL[sel]}
+                entrypoint={TOY_ENTRYPOINT}
+                onCircuitJson={handleCircuitJson}
+                onRunCompleted={handleRunCompleted}
+                onError={handleError}
+              />
             </div>
             <p className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background/85 px-3 py-1 text-center text-[11px] whitespace-nowrap text-muted-foreground backdrop-blur">
-              {routed ? "Routage terminé — 0 net non connecté" : "Aperçu en cours de routage — les pistes en pointillés restent à router"}
+              {sel === "broken"
+                ? "Circuit volontairement fautif — les erreurs doivent s'afficher dans Validation"
+                : evaluating
+                  ? "Évaluation tscircuit en cours dans le WebWorker…"
+                  : `Carte jouet ESP32-C3 · ${summary?.components ?? 0} composants · ${summary?.traces ?? 0} traces`}
             </p>
-          </div>
-        )}
-
-        {tab === "schematic" && (
-          <div className="preview-canvas h-full w-full">
-            <SchematicPreview />
-          </div>
-        )}
-
-        {tab === "3d" && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Box className="h-7 w-7" /></span>
-            <div>
-              <p className="font-display text-sm font-semibold">Vue 3D</p>
-              <p className="mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
-                Rendu 3D généré par le viewer tscircuit dans le produit réel. Emplacement réservé dans ce prototype.
-              </p>
-            </div>
           </div>
         )}
 
@@ -106,32 +166,71 @@ export function PreviewPanel({ routed }: { routed: boolean }) {
               </tbody>
             </table>
             <p className="border-t border-border bg-muted/30 px-3 py-2 text-right text-xs text-muted-foreground">
-              Total composants estimé : <span className="font-semibold text-foreground">≈ 5,10 €</span> · stock vérifié à l'instant
+              BOM indicative du prototype — dérivée automatiquement à partir de M1 ·{" "}
+              {summary ? `${summary.components} composants évalués` : "évaluation en cours…"}
             </p>
           </div>
         )}
 
         {tab === "validation" && (
           <div className="mx-auto max-w-2xl space-y-2">
-            {GATES.map((gate) => (
-              <div key={gate.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-3.5 py-3">
-                <span className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded-full",
-                  gate.status === "ok" && "bg-emerald-500/15 text-emerald-500",
-                  gate.status === "running" && "bg-primary/15 text-primary",
-                  gate.status === "pending" && "bg-muted text-muted-foreground"
-                )}>
-                  {gate.status === "ok" ? <Check className="h-3.5 w-3.5" /> : gate.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Circle className="h-3 w-3" />}
-                </span>
-                <div className="flex-1">
-                  <p className="text-[13px] font-medium"><span className="font-mono text-xs text-muted-foreground">{gate.id}</span> · {gate.label}</p>
-                  <p className="text-xs text-muted-foreground">{gate.status === "running" && !routed ? gate.note : gate.status === "ok" ? gate.note : routed && gate.id === "G3" ? "0 net non routé" : gate.note}</p>
-                </div>
-                <Badge variant={gate.status === "ok" ? "success" : gate.status === "running" ? "default" : "outline"}>
-                  {gate.status === "ok" ? "Validé" : gate.status === "running" ? "En cours" : "En attente"}
-                </Badge>
+            <GateRow
+              id="G0"
+              label="Évaluation"
+              status={evaluating ? "running" : evalOk ? "ok" : "error"}
+              note={
+                evaluating
+                  ? "Évaluation dans le WebWorker…"
+                  : evalOk
+                    ? `${summary?.elements} éléments · 0 erreur`
+                    : `${structuredErrors.length} erreur(s) — voir détail ci-dessous`
+              }
+            />
+            <GateRow
+              id="G1"
+              label="Netlist"
+              status={!summary ? "pending" : summary.traces > 0 && evalOk ? "ok" : summary.traces > 0 ? "running" : "pending"}
+              note={!summary ? "En attente de l'évaluation" : `${summary.traces} traces · ${summary.components} composants`}
+            />
+            <GateRow
+              id="G2"
+              label="Placement"
+              status="pending"
+              note="Check automatique au jalon M1 (issue #4)"
+            />
+            <GateRow
+              id="G3"
+              label="Routage"
+              status="pending"
+              note="Carte jouet non routée — hors périmètre M0"
+            />
+            <GateRow
+              id="G4"
+              label="DRC KiCad"
+              status="pending"
+              note="Worker Docker au jalon M2 (issue #7)"
+            />
+            <GateRow
+              id="G5"
+              label="Fabricabilité"
+              status="pending"
+              note="Stock revérifié à l'export (issue #7)"
+            />
+
+            {structuredErrors.length > 0 && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3.5">
+                <p className="text-[13px] font-medium text-destructive">Erreurs structurées ({structuredErrors.length})</p>
+                <ul className="mt-2 space-y-1.5">
+                  {structuredErrors.map((e, i) => (
+                    <li key={`${e.code}-${i}`} className="font-mono text-xs leading-relaxed text-muted-foreground">
+                      <span className="mr-2 rounded bg-destructive/10 px-1.5 py-0.5 text-destructive">{e.code}</span>
+                      {e.message}
+                    </li>
+                  ))}
+                </ul>
               </div>
-            ))}
+            )}
+
             <p className="px-1 pt-1 text-xs leading-relaxed text-muted-foreground">
               Un DRC propre prouve que les règles géométriques sont respectées, pas que la carte fonctionnera. La validation finale reste humaine.
             </p>
@@ -140,15 +239,46 @@ export function PreviewPanel({ routed }: { routed: boolean }) {
       </div>
 
       <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-        <span className="font-mono">v12</span>
-        <span className="flex items-center gap-1"><Check className="h-3 w-3 text-emerald-500" /> Évaluation OK</span>
-        <span className="flex items-center gap-1"><Check className="h-3 w-3 text-emerald-500" /> Netlist OK</span>
-        <span className="flex items-center gap-1"><Check className="h-3 w-3 text-emerald-500" /> Placement OK</span>
-        <span className={cn("flex items-center gap-1", routed ? "text-foreground" : "")}>
-          {routed ? <Check className="h-3 w-3 text-emerald-500" /> : <Loader2 className="h-3 w-3 animate-spin text-primary" />} Routage {routed ? "OK" : "…"}
+        <span className="font-mono">main.tsx</span>
+        <span className="flex items-center gap-1">
+          {evaluating ? <Loader2 className="h-3 w-3 animate-spin text-primary" /> : evalOk ? <Check className="h-3 w-3 text-emerald-500" /> : <span className="h-2 w-2 rounded-full bg-destructive" />}
+          Évaluation {evaluating ? "…" : evalOk ? "OK" : "en erreur"}
         </span>
-        <span className="ml-auto">Prototype UI — données simulées</span>
+        <span className="font-mono">
+          tscircuit {TSCIRCUIT_VERSIONS.tscircuit} · eval {TSCIRCUIT_VERSIONS.eval} · runframe {TSCIRCUIT_VERSIONS.runframe}
+        </span>
+        <span className="ml-auto">Preview réelle — circuit jouet ESP32-C3 + LED + bouton</span>
       </footer>
     </section>
+  );
+}
+
+function GateRow({
+  id, label, status, note,
+}: {
+  id: string;
+  label: string;
+  status: "ok" | "running" | "pending" | "error";
+  note: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-3.5 py-3">
+      <span className={cn(
+        "flex h-6 w-6 items-center justify-center rounded-full",
+        status === "ok" && "bg-emerald-500/15 text-emerald-500",
+        status === "running" && "bg-primary/15 text-primary",
+        status === "pending" && "bg-muted text-muted-foreground",
+        status === "error" && "bg-destructive/15 text-destructive"
+      )}>
+        {status === "ok" ? <Check className="h-3.5 w-3.5" /> : status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : status === "error" ? <Bug className="h-3.5 w-3.5" /> : <Circle className="h-3 w-3" />}
+      </span>
+      <div className="flex-1">
+        <p className="text-[13px] font-medium"><span className="font-mono text-xs text-muted-foreground">{id}</span> · {label}</p>
+        <p className="text-xs text-muted-foreground">{note}</p>
+      </div>
+      <Badge variant={status === "ok" ? "success" : status === "error" ? "destructive" : status === "running" ? "default" : "outline"}>
+        {status === "ok" ? "Validé" : status === "error" ? "Erreur" : status === "running" ? "En cours" : "En attente"}
+      </Badge>
+    </div>
   );
 }

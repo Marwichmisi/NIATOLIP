@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* RunFrame et les viewers tscircuit sont précompilés : leurs classes
+   utilitaires vivent dans node_modules (ignoré par la détection auto),
+   on les déclare explicitement comme sources. */
+@source "../../node_modules/@tscircuit/runframe/dist/*.js";
+@source "../../node_modules/@tscircuit/pcb-viewer/dist/*.js";
+@source "../../node_modules/@tscircuit/schematic-viewer/dist/*.js";
+@source "../../node_modules/@tscircuit/3d-viewer/dist/*.js";
+@source "../../node_modules/@tscircuit/assembly-viewer/dist/*.js";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

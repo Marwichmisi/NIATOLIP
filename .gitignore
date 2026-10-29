@@ -24,3 +24,5 @@ artifacts/
 # Système
 .DS_Store
 Thumbs.db
+
+*.tsbuildinfo

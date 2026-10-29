@@ -22,8 +22,6 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const routed = steps.find((s) => s.id === "routing")?.status === "done";
-
   const clearTimers = () => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
@@ -94,7 +92,7 @@ export default function Home() {
           onStop={handleStop}
           onContinue={() => startSimulation(true)}
         />
-        <PreviewPanel routed={routed} />
+        <PreviewPanel />
       </main>
     </div>
   );
