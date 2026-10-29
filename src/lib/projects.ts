@@ -166,13 +166,13 @@ async function pgCreate(name: string): Promise<ProjectSummary> {
   const t = now();
   const seed = { ...TOY_FSMAP_GOOD };
   const client = await getPool().connect();
+  const versionId = randomUUID();
   try {
     await client.query("begin");
     await client.query(
       "insert into projects(id, user_id, name, working_files) values($1,$2,$3,$4)",
       [id, LOCAL_USER_ID, name, JSON.stringify(seed)]
     );
-    const versionId = randomUUID();
     await client.query(
       "insert into project_versions(id, project_id, version_no, label) values($1,$2,1,'création')",
       [versionId, id]
@@ -194,7 +194,7 @@ async function pgCreate(name: string): Promise<ProjectSummary> {
   } finally {
     client.release();
   }
-  return { id, name, created_at: t, updated_at: t, current_version_id: null, current_version_no: 1 };
+  return { id, name, created_at: t, updated_at: t, current_version_id: versionId, current_version_no: 1 };
 }
 
 async function pgGet(id: string): Promise<ProjectSummary> {
@@ -322,10 +322,14 @@ async function pgRestore(id: string, versionId: string, label?: string): Promise
   if (rows.length === 0) err("not_found", "Version introuvable.", 404);
   const files: Record<string, string> = {};
   for (const r of rows) files[r.path as string] = r.content as string;
-  await pgPutFiles(id, files);
   const client = await getPool().connect();
   try {
     await client.query("begin");
+    // Copie de travail + snapshot dans la même transaction : jamais d'état
+    // intermédiaire (working modifié sans nouvelle version).
+    await client.query("update projects set working_files=$1, updated_at=now() where id=$2", [
+      JSON.stringify(files), id,
+    ]);
     const src = await client.query("select version_no from project_versions where id=$1", [versionId]);
     const srcNo = (src.rows[0] as unknown as { version_no: number }).version_no;
     const { versionNo } = await snapshot(
