@@ -1,0 +1,26 @@
+# Dépendances
+node_modules/
+.pnp/
+.pnp.js
+
+# Next.js
+.next/
+out/
+dist/
+build/
+
+# Environnements & secrets (jamais commités)
+.env
+.env*.local
+*.pem
+*.key
+
+# Base locale / artefacts
+*.db
+*.sqlite
+projects/
+artifacts/
+
+# Système
+.DS_Store
+Thumbs.db
