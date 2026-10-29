@@ -9,6 +9,9 @@
 // - écritures fichiers sérialisées (jamais deux en parallèle).
 
 import { tool, type ToolSet } from "ai";
+import { createHash } from "node:crypto";
+import { mkdir, readFile as readFsFile, writeFile as writeFsFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
 import {
   createVersion,
@@ -115,9 +118,50 @@ function resolveEntrypoint(files: Record<string, string>): string {
   return first;
 }
 
+// Hash fort du contenu (clé du cache disque) — best-effort, jamais bloquant.
+// Le cache vit dans PROJECTS_DIR/.cache (éphémère en conteneur : volatil au
+// redéploiement, persistant en dev — le L1 mémoire couvre le run courant).
+function evalCacheDir(): string {
+  return join(process.env.PROJECTS_DIR ?? join(process.cwd(), "projects"), ".cache", "eval");
+}
+
 function hashFiles(files: Record<string, string>, entrypoint: string): string {
-  const keys = Object.keys(files).sort();
-  return keys.map((k) => `${k}:${files[k].length}:${entrypoint === k ? "#" : ""}`).join("|");
+  const h = createHash("sha256");
+  h.update(`entry:${entrypoint}\n`);
+  for (const k of Object.keys(files).sort()) {
+    h.update(`--- ${k} ---\n`);
+    h.update(files[k]);
+    h.update("\n");
+  }
+  return h.digest("hex").slice(0, 32);
+}
+
+async function evalDiskGet(
+  hash: string
+): Promise<{ summary: CircuitSummary; json: CircuitElement[] } | null> {
+  try {
+    const raw = await readFsFile(join(evalCacheDir(), `${hash}.json`), "utf8");
+    if (raw.length > 2_000_000) return null;
+    const parsed = JSON.parse(raw) as { summary: CircuitSummary; json: CircuitElement[] };
+    if (!parsed || typeof parsed.summary !== "object" || !Array.isArray(parsed.json)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function evalDiskSet(
+  hash: string,
+  data: { summary: CircuitSummary; json: CircuitElement[] }
+): Promise<void> {
+  try {
+    const raw = JSON.stringify(data);
+    if (raw.length > 2_000_000) return;
+    await mkdir(evalCacheDir(), { recursive: true });
+    await writeFsFile(join(evalCacheDir(), `${hash}.json`), raw, "utf8");
+  } catch {
+    // Cache best-effort : jamais bloquant.
+  }
 }
 
 const pathSchema = z.string().min(1).max(120).describe("Chemin dans le projet (ex. main.tsx).");
@@ -139,8 +183,15 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
     if (state.lastEval && state.lastEval.hash === hash) {
       return { summary: state.lastEval.summary, json: state.lastEval.json, fresh: false };
     }
+    // Cache disque inter-runs (mêmes fichiers → même verdict, sans réévaluation).
+    const disk = await evalDiskGet(hash);
+    if (disk) {
+      state.lastEval = { hash, summary: disk.summary, json: disk.json };
+      return { summary: disk.summary, json: disk.json, fresh: false };
+    }
     const full = await evaluateFullServer(files, entrypoint);
     state.lastEval = { hash, summary: full.summary, json: full.circuitJson };
+    await evalDiskSet(hash, { summary: full.summary, json: full.circuitJson });
     return { summary: full.summary, json: full.circuitJson, fresh: true };
   }
 

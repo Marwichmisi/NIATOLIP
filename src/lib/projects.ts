@@ -39,6 +39,48 @@ export interface ChatHistoryMsg {
   role: "user" | "agent";
   text: string;
   created_at: string;
+  /** Appels d'outils du run (mémoire inter-runs, option validée) : sans eux,
+   *  le modèle repart de zéro à chaque question. Bornés à l'écriture. */
+  parts?: StoredToolPart[];
+}
+
+/** Une partie d'outil persistée : appel + résultat (jamais de JSON brut volumineux). */
+export interface StoredToolPart {
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+  output?: unknown;
+  error?: string;
+}
+
+const MAX_PARTS_PER_MESSAGE = 100;
+const MAX_PART_JSON = 50_000;
+
+function validateParts(parts: unknown): StoredToolPart[] | undefined {
+  if (parts === undefined) return undefined;
+  if (!Array.isArray(parts)) err("invalid_message", "parts doit être un tableau.");
+  const list = parts as unknown[];
+  if (list.length > MAX_PARTS_PER_MESSAGE) {
+    err("invalid_message", `Trop de parties d'outils (max ${MAX_PARTS_PER_MESSAGE}).`);
+  }
+  const out: StoredToolPart[] = [];
+  for (const p of list) {
+    const part = p as Record<string, unknown>;
+    if (typeof part.toolName !== "string" || typeof part.toolCallId !== "string") {
+      err("invalid_message", "Partie d'outil invalide (toolName/toolCallId requis).");
+    }
+    const clean: StoredToolPart = {
+      toolName: (part.toolName as string).slice(0, 80),
+      toolCallId: (part.toolCallId as string).slice(0, 80),
+      input: part.input ?? null,
+    };
+    if (part.output !== undefined) clean.output = part.output;
+    if (typeof part.error === "string") clean.error = part.error.slice(0, 2000);
+    const size = JSON.stringify(clean).length;
+    if (size > MAX_PART_JSON) err("invalid_message", `Partie d'outil trop grosse (${size} > ${MAX_PART_JSON}).`);
+    out.push(clean);
+  }
+  return out;
 }
 
 const MAX_FILES = 50;
@@ -364,14 +406,19 @@ async function pgMessages(id: string): Promise<ChatHistoryMsg[]> {
     "select role, ui_message_json, created_at from messages where conversation_id=$1 order by created_at asc, id asc limit $2",
     [cid, MAX_HISTORY]
   );
-  return rows.map((r) => ({
-    role: r.role as "user" | "agent",
-    text: String((r.ui_message_json as { text?: unknown }).text ?? ""),
-    created_at: new Date(r.created_at).toISOString(),
-  }));
+  return rows.map((r) => {
+    const payload = (r.ui_message_json ?? {}) as { text?: unknown; parts?: unknown };
+    const msg: ChatHistoryMsg = {
+      role: r.role as "user" | "agent",
+      text: String(payload.text ?? ""),
+      created_at: new Date(r.created_at).toISOString(),
+    };
+    if (Array.isArray(payload.parts)) msg.parts = payload.parts as StoredToolPart[];
+    return msg;
+  });
 }
 
-async function pgAppendMessages(id: string, msgs: Array<{ role: string; text: string }>): Promise<void> {
+async function pgAppendMessages(id: string, msgs: Array<{ role: string; text: string; parts?: unknown }>): Promise<void> {
   await initSchema();
   await pgGet(id);
   const cid = await pgConvId(id);
@@ -380,8 +427,9 @@ async function pgAppendMessages(id: string, msgs: Array<{ role: string; text: st
     if (typeof m.text !== "string" || m.text.length === 0 || m.text.length > MAX_TEXT) {
       err("invalid_message", "text vide ou trop long (max 20000).");
     }
+    const parts = validateParts(m.parts);
     await getPool().query("insert into messages(id, conversation_id, role, ui_message_json) values($1,$2,$3,$4)", [
-      randomUUID(), cid, m.role, JSON.stringify({ text: m.text }),
+      randomUUID(), cid, m.role, JSON.stringify(parts ? { text: m.text, parts } : { text: m.text }),
     ]);
   }
 }
@@ -564,21 +612,24 @@ export async function getMessages(id: string): Promise<ChatHistoryMsg[]> {
 
 export async function appendMessages(
   id: string,
-  msgs: Array<{ role: string; text: string }>
+  msgs: Array<{ role: string; text: string; parts?: unknown }>
 ): Promise<void> {
   for (const m of msgs) {
     if (m.role !== "user" && m.role !== "agent") err("invalid_message", "role doit être user|agent.");
     if (typeof m.text !== "string" || m.text.length === 0 || m.text.length > MAX_TEXT) {
       err("invalid_message", "text vide ou trop long (max 20000).");
     }
+    validateParts(m.parts);
   }
   if (storageBackend() === "postgres") return pgAppendMessages(id, msgs);
   const doc = await readDoc(id);
   for (const m of msgs) {
+    const parts = validateParts(m.parts);
     doc.conversation.push({
       role: m.role as "user" | "agent",
       text: m.text,
       created_at: now(),
+      ...(parts ? { parts } : {}),
     });
   }
   doc.conversation = doc.conversation.slice(-MAX_HISTORY);

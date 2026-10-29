@@ -45,9 +45,11 @@ export const searchComponentsSchema = z.object({
   filters: z
     .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
     .describe(
-      "Filtres passés tels quels à l'API (ex. { resistance: 10000, package: '0402' } ; " +
-        "microcontrôleur : { has_usb: true, has_i2c: true, flash_min: 262144 }). " +
-        "Valeurs numériques en unités SI de base (ohms, farads, octets)."
+      "Filtres passés à l'API. UNITÉS : écrire naturellement, la conversion est automatique — " +
+        '"10k"/"4.7k"→ohms (10000), "100nF"/"4.7uF"/"10pF"→farads (1e-7), "1M"→1000000. ' +
+        "Exemples : resistor { resistance: '10k', package: '0402' } ; capacitor { capacitance: '100nF', package: '0402' } ; " +
+        "microcontroller { has_usb: true, has_i2c: true, flash_min: 262144 } (octets). " +
+        "Valeurs numériques seules acceptées aussi (10000 = 10 kΩ)."
     )
     .default({}),
   basicOnly: z
@@ -84,6 +86,7 @@ export interface JlcSearchResult {
 
 export interface JlcDetails {
   lcscId: string;
+  cached?: boolean;
   footprinter: string | null;
   footprintVerified: boolean;
   title: string | null;
@@ -111,6 +114,78 @@ function cacheGet<T>(key: string): (T & { cached: true }) | null {
 function cacheSet(key: string, data: unknown): void {
   if (cache.size > 200) cache.clear();
   cache.set(key, { at: Date.now(), data });
+}
+
+// ---------- Normalisation des unités (option A validée) ----------
+// Le modèle écrit naturellement "10k", "100nF", "4.7uF" ; l'API jlcsearch
+// n'accepte que des nombres SI (ohms, farads, octets) et ignore les suffixes
+// ("10k" était lu comme 10). La conversion se fait ici, jamais côté modèle.
+
+const UNIT_FACTORS: Record<string, number> = {
+  p: 1e-12, n: 1e-9, u: 1e-6, "µ": 1e-6, "μ": 1e-6, m: 1e-3,
+  "": 1, r: 1, k: 1e3, M: 1e6, G: 1e9,
+};
+
+// Clés de filtres numériques (le reste — package, mpn… — reste texte intact).
+const NUMERIC_FILTER_RE = /(resistance|capacitance|inductance|flash|ram|eeprom|voltage|current|power|frequency|tolerance|size|count|pins|watts)$/i;
+
+function normalizeNumberLike(key: string, raw: unknown): unknown {
+  if (typeof raw === "number") return raw;
+  if (typeof raw !== "string" || !NUMERIC_FILTER_RE.test(key)) return raw;
+  const s = raw.trim().replace(/\s+/g, "").replace(",", ".");
+  const m = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)([pPnNuUµμmMkKgG]?)(?:[a-zA-ZΩ]*)$/.exec(s);
+  if (!m) return raw;
+  const suffix = m[2] === "K" ? "k" : m[2] === "k" ? "k" : m[2];
+  const factor = UNIT_FACTORS[suffix] ?? UNIT_FACTORS[suffix.toLowerCase()];
+  if (factor === undefined) return raw;
+  const value = Number(m[1]) * factor;
+  return Number.isFinite(value) ? value : raw;
+}
+
+function normalizeFilters(filters: Record<string, unknown>): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const [k, v] of Object.entries(filters).slice(0, 8)) {
+    const n = normalizeNumberLike(k, v);
+    if (typeof n === "string" || typeof n === "number" || typeof n === "boolean") out[k] = n;
+  }
+  return out;
+}
+
+// ---------- Cache persistant normalisé (option validée) ----------
+// L1 mémoire (24 h) + L2 disque (PROJECTS_DIR/.cache, 24 h) : partagé entre
+// runs et restarts. Clé normalisée SANS la limite (slice après lecture).
+
+import { createHash } from "node:crypto";
+import { mkdir, readFile as readFsFile, writeFile as writeFsFile } from "node:fs/promises";
+import { join } from "node:path";
+
+function cacheDir(): string {
+  return join(process.env.PROJECTS_DIR ?? join(process.cwd(), "projects"), ".cache", "jlc");
+}
+
+function cacheKey(category: string, filters: object, basicOnly?: boolean, inStockOnly?: boolean): string {
+  const norm = JSON.stringify({ c: category, f: filters, b: basicOnly ?? null, s: inStockOnly ?? true });
+  return createHash("sha256").update(norm).digest("hex").slice(0, 32);
+}
+
+async function diskCacheGet(key: string): Promise<JlcSearchResult | JlcDetails | null> {
+  try {
+    const raw = await readFsFile(join(cacheDir(), `${key}.json`), "utf8");
+    const parsed = JSON.parse(raw) as { at: number; data: unknown };
+    if (Date.now() - parsed.at > CACHE_TTL_MS) return null;
+    return parsed.data as JlcSearchResult | JlcDetails;
+  } catch {
+    return null;
+  }
+}
+
+async function diskCacheSet(key: string, data: unknown): Promise<void> {
+  try {
+    await mkdir(cacheDir(), { recursive: true });
+    await writeFsFile(join(cacheDir(), `${key}.json`), JSON.stringify({ at: Date.now(), data }), "utf8");
+  } catch {
+    // Cache best-effort : jamais bloquant.
+  }
 }
 
 // ---------- HTTP (timeout + retries, erreur explicite) ----------
@@ -162,13 +237,21 @@ function toCandidate(row: Record<string, unknown>): JlcCandidate {
 export async function searchComponents(input: SearchComponentsInput): Promise<JlcSearchResult> {
   const parsed = searchComponentsSchema.parse(input);
   const route = JLC_CATEGORIES[parsed.category];
+  // Normalisation unités (le modèle écrit "10k"/"100nF", l'API veut du SI).
+  const filters = normalizeFilters(parsed.filters as Record<string, unknown>);
   const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(parsed.filters).slice(0, 8)) {
+  for (const [k, v] of Object.entries(filters)) {
     params.set(k, String(v));
   }
-  const key = `${route}?${params.toString()}|b:${parsed.basicOnly ?? "-"}|s:${parsed.inStockOnly ?? true}|l:${parsed.limit ?? 10}`;
+  // Clé SANS la limite : même recherche, limit différente = même entrée.
+  const key = cacheKey(parsed.category, filters, parsed.basicOnly, parsed.inStockOnly);
   const hit = cacheGet<JlcSearchResult>(key);
-  if (hit) return { ...hit, cached: true };
+  if (hit) return finishSearch(hit, parsed.limit ?? 10, true);
+  const disk = await diskCacheGet(key);
+  if (disk && "candidates" in (disk as object)) {
+    cacheSet(key, disk);
+    return finishSearch(disk as JlcSearchResult, parsed.limit ?? 10, true);
+  }
 
   const url = `${JLC_BASE}${route}.json${params.toString() ? `?${params.toString()}` : ""}`;
   const data = (await fetchJson(url)) as Record<string, unknown>;
@@ -183,7 +266,6 @@ export async function searchComponents(input: SearchComponentsInput): Promise<Jl
   if (inStockOnly) candidates = candidates.filter((c) => (c.stock ?? -1) !== 0);
   if (parsed.basicOnly) candidates = candidates.filter((c) => c.basic);
   candidates.sort((a, b) => (b.stock ?? -1) - (a.stock ?? -1));
-  candidates = candidates.slice(0, parsed.limit ?? 10);
 
   const result: JlcSearchResult = {
     candidates,
@@ -192,7 +274,7 @@ export async function searchComponents(input: SearchComponentsInput): Promise<Jl
     ...(candidates.length === 0
       ? {
           stockWarning:
-            "0 candidat : vérifiez les filtres (unités SI : ohms, farads, octets ; pas de suffixe k/M) " +
+            "0 candidat : vérifiez les filtres (ex. resistance en ohms, capacitance en farads) " +
             "ou réessayez (sync catalogue en cours possible). N'inventez rien.",
         }
       : candidates.some((c) => c.stock == null)
@@ -200,7 +282,13 @@ export async function searchComponents(input: SearchComponentsInput): Promise<Jl
         : {}),
   };
   cacheSet(key, result);
-  return result;
+  await diskCacheSet(key, result);
+  return finishSearch(result, parsed.limit ?? 10, false);
+}
+
+/** Applique la limite APRÈS lecture du cache (clé indépendante de limit). */
+function finishSearch(stored: JlcSearchResult, limit: number, cached: boolean): JlcSearchResult {
+  return { ...stored, candidates: stored.candidates.slice(0, limit), cached };
 }
 
 /** Détails d'une pièce : footprint tscircuit vérifié + résumé EasyEDA borné. */
@@ -210,7 +298,12 @@ export async function getComponentDetails(lcscId: string): Promise<JlcDetails> {
   const id = `C${m[1]}`;
   const key = `details:${id}`;
   const hit = cacheGet<JlcDetails>(key);
-  if (hit) return { ...hit, cached: true } as JlcDetails;
+  if (hit) return { ...(hit as JlcDetails), cached: true };
+  const disk = await diskCacheGet(key);
+  if (disk && "lcscId" in (disk as object)) {
+    cacheSet(key, disk);
+    return { ...(disk as JlcDetails), cached: true };
+  }
 
   const [fpRaw, eeRaw] = await Promise.all([
     fetchJson(`${JLC_BASE}/api/footprinter_strings/${id}`).catch(() => null),
@@ -248,5 +341,6 @@ export async function getComponentDetails(lcscId: string): Promise<JlcDetails> {
         : "Empreinte non vérifiée (IoU < 95 % ou non traitée) — choisir une autre pièce ou signaler le risque.",
   };
   cacheSet(key, details);
+  await diskCacheSet(key, details);
   return details;
 }

@@ -1,11 +1,22 @@
 // Client du run agent : envoie le run à POST /api/chat et parse le flux
 // UIMessage (SSE `data: {...}`). Sans @ai-sdk/react (dépendance évitée) :
 // parseur minimal couvrant texte + cycle de vie des outils.
+// La mémoire inter-runs passe par ici : chaque message agent embarque ses
+// parties d'outils (dynamic-tool), renvoyées au run suivant et persistées.
 "use client";
+
+export interface ToolPartIn {
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+  output?: unknown;
+  error?: string;
+}
 
 export interface ChatMsgIn {
   role: "user" | "agent";
   text: string;
+  parts?: ToolPartIn[];
 }
 
 export interface StreamCallbacks {
@@ -15,18 +26,53 @@ export interface StreamCallbacks {
   onError: (message: string) => void;
 }
 
+type UIMessagePartOut =
+  | { type: "text"; text: string }
+  | {
+      type: "dynamic-tool";
+      toolName: string;
+      toolCallId: string;
+      state: "output-available" | "output-error";
+      input: unknown;
+      output?: unknown;
+      errorText?: string;
+    };
+
 interface UIMessageOut {
   id: string;
   role: "user" | "assistant";
-  parts: Array<{ type: "text"; text: string }>;
+  parts: UIMessagePartOut[];
 }
 
 function toUIMessages(msgs: ChatMsgIn[]): UIMessageOut[] {
-  return msgs.map((m, i) => ({
-    id: `m${i}`,
-    role: m.role === "user" ? "user" : "assistant",
-    parts: [{ type: "text", text: m.text }],
-  }));
+  return msgs.map((m, i) => {
+    const parts: UIMessagePartOut[] = [{ type: "text", text: m.text }];
+    if (m.role === "agent" && Array.isArray(m.parts)) {
+      for (const p of m.parts.slice(0, 100)) {
+        if (!p || typeof p.toolName !== "string" || typeof p.toolCallId !== "string") continue;
+        if (typeof p.error === "string") {
+          parts.push({
+            type: "dynamic-tool",
+            toolName: p.toolName.slice(0, 80),
+            toolCallId: p.toolCallId.slice(0, 80),
+            state: "output-error",
+            input: p.input ?? null,
+            errorText: p.error.slice(0, 2000),
+          });
+        } else {
+          parts.push({
+            type: "dynamic-tool",
+            toolName: p.toolName.slice(0, 80),
+            toolCallId: p.toolCallId.slice(0, 80),
+            state: "output-available",
+            input: p.input ?? null,
+            output: p.output ?? null,
+          });
+        }
+      }
+    }
+    return { id: `m${i}`, role: m.role === "user" ? "user" : "assistant", parts };
+  });
 }
 
 function toolDetail(name: string, output: unknown): string {
@@ -56,7 +102,7 @@ export async function streamChat(opts: {
   clientBoard: Record<string, unknown> | null;
   signal: AbortSignal;
   cb: StreamCallbacks;
-}): Promise<{ text: string; runId: string | null }> {
+}): Promise<{ text: string; runId: string | null; parts: ToolPartIn[] }> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -79,6 +125,8 @@ export async function streamChat(opts: {
   let buffer = "";
   let text = "";
   const toolNames = new Map<string, string>();
+  const toolInputs = new Map<string, unknown>();
+  const parts: ToolPartIn[] = [];
 
   const handleChunk = (chunk: Record<string, unknown>) => {
     const type = chunk.type as string;
@@ -89,15 +137,29 @@ export async function streamChat(opts: {
       const id = String(chunk.toolCallId ?? "");
       const name = String(chunk.toolName ?? "outil");
       toolNames.set(id, name);
+      toolInputs.set(id, (chunk.input as unknown) ?? null);
       opts.cb.onToolStart(name, id);
     } else if (type === "tool-output-available") {
       const id = String(chunk.toolCallId ?? "");
       const name = toolNames.get(id) ?? "outil";
       const output = chunk.output as unknown;
       const err = output && typeof output === "object" && (output as Record<string, unknown>).error;
+      parts.push({
+        toolName: name,
+        toolCallId: id,
+        input: toolInputs.get(id) ?? null,
+        ...(err ? { error: String(err).slice(0, 2000) } : { output: output ?? null }),
+      });
       opts.cb.onToolEnd(name, !err, toolDetail(name, output));
     } else if (type === "tool-input-error") {
-      const name = String(chunk.toolName ?? "outil");
+      const id = String(chunk.toolCallId ?? "");
+      const name = String(chunk.toolName ?? toolNames.get(id) ?? "outil");
+      parts.push({
+        toolName: name,
+        toolCallId: id || `err-${parts.length}`,
+        input: toolInputs.get(id) ?? chunk.input ?? null,
+        error: String(chunk.errorText ?? "entrée invalide").slice(0, 2000),
+      });
       opts.cb.onToolEnd(name, false, String(chunk.errorText ?? "entrée invalide").slice(0, 160));
     } else if (type === "error") {
       opts.cb.onError(String(chunk.errorText ?? "Erreur de stream").slice(0, 300));
@@ -108,9 +170,9 @@ export async function streamChat(opts: {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
+    const splits = buffer.split("\n\n");
+    buffer = splits.pop() ?? "";
+    for (const part of splits) {
       const line = part.trim();
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
@@ -122,5 +184,5 @@ export async function streamChat(opts: {
       }
     }
   }
-  return { text, runId };
+  return { text, runId, parts };
 }

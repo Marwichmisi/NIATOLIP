@@ -60,6 +60,9 @@ export default function Home() {
   const [projectLoading, setProjectLoading] = useState(true);
   const persistedCount = useRef(0);
   const persisting = useRef(false);
+  // Index du dernier message FINALISÉ (persistable). Le message agent en
+  // cours de stream ne l'est jamais : son texte est partiel et sans parts.
+  const finalizedRef = useRef(-1);
 
   const currentVersionNo =
     projects.find((p) => p.id === projectId)?.current_version_no ?? null;
@@ -86,6 +89,7 @@ export default function Home() {
       const history = messagesData.messages.filter((m) => m.role === "user" || m.role === "agent");
       setMessages(history.length > 0 ? history : [GREETING]);
       persistedCount.current = history.length > 0 ? history.length : 0;
+      finalizedRef.current = history.length > 0 ? history.length - 1 : -1;
       setProjectId(id);
       try {
         localStorage.setItem(LAST_PROJECT_KEY, id);
@@ -129,14 +133,18 @@ export default function Home() {
   }, []);
 
   // Persistance incrémentale de l'historique (ne bloque jamais l'UI).
+  // Seuls les messages FINALISÉS sont persistés (finalizedRef) : le message
+  // agent en cours de stream (texte partiel, sans parts) ne l'est jamais —
+  // sinon la mémoire inter-runs serait un texte vide sans appels d'outils.
   useEffect(() => {
     if (projectLoading || !projectId || persisting.current) return;
-    if (messages.length <= persistedCount.current) {
-      persistedCount.current = messages.length;
+    const finalized = Math.min(finalizedRef.current + 1, messages.length);
+    if (finalized <= persistedCount.current) {
+      persistedCount.current = Math.min(persistedCount.current, finalized);
       return;
     }
-    const pending = messages.slice(persistedCount.current);
-    persistedCount.current = messages.length;
+    const pending = messages.slice(persistedCount.current, finalized);
+    persistedCount.current = finalized;
     persisting.current = true;
     fetch(`/api/projects/${projectId}/messages`, {
       method: "POST",
@@ -160,6 +168,7 @@ export default function Home() {
     });
     setMessages([GREETING]);
     persistedCount.current = 0;
+    finalizedRef.current = -1;
     await openProject(created.project.id);
   }, [openProject]);
 
@@ -174,6 +183,7 @@ export default function Home() {
     setVersions(list.versions);
     await refreshProjects();
     setMessages((m) => [...m, { role: "agent", text: `Point de restauration v${data.version.version_no} créé — la copie de travail est figée.` }]);
+    finalizedRef.current = messagesRef.current.length;
   }, [projectId, refreshProjects]);
 
   const handleRestoreVersion = useCallback(async (versionId: string) => {
@@ -190,6 +200,7 @@ export default function Home() {
     setVersions(list.versions);
     await refreshProjects();
     setMessages((m) => [...m, { role: "agent", text: `Version restaurée en v${data.version.version_no} (copie, historique préservé).` }]);
+    finalizedRef.current = messagesRef.current.length;
   }, [projectId, refreshProjects]);
 
   const onDividerPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
@@ -237,11 +248,13 @@ export default function Home() {
     runIdRef.current = null;
     setSteps([]);
     const history: ChatMsg[] = [...messagesRef.current, { role: "user", text }];
-    setMessages([...history, { role: "agent", text: "" }]);
+    setMessages(history);
+    finalizedRef.current = history.length - 1; // le user seul est finalisé…
+    setMessages([...history, { role: "agent", text: "" }]); // …le placeholder ne l'est pas
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const { runId } = await streamChat({
+      const { runId, parts } = await streamChat({
         messages: history,
         model: choice,
         projectId,
@@ -271,6 +284,16 @@ export default function Home() {
             setMessages((m) => [...m, { role: "agent", text: `Erreur de stream : ${message}` }]),
         },
       });
+      // Mémoire inter-runs : les parties d'outils sont attachées au message
+      // final (renvoyées au run suivant + persistées avec l'historique).
+      if (parts.length > 0) {
+        setMessages((m) => {
+          const next = [...m];
+          const last = next[next.length - 1];
+          if (last.role === "agent") next[next.length - 1] = { ...last, parts };
+          return next;
+        });
+      }
       if (runId) {
         runIdRef.current = runId;
         try {
@@ -295,6 +318,9 @@ export default function Home() {
         });
       }
     } finally {
+      // Le message agent final (texte + parts) est finalisé : l'effect le persistera.
+      // Math.max : handleStop a pu ajouter un message après (abort) — le garder couvert.
+      finalizedRef.current = Math.max(finalizedRef.current, history.length);
       abortRef.current = null;
       setRunning(false);
       await refreshProjectState();
@@ -314,6 +340,7 @@ export default function Home() {
     setRunning(false);
     setSteps((prev) => prev.map((s) => s.status === "running" ? { ...s, status: "pending", detail: "Interrompu par l'utilisateur" } : s));
     setMessages((m) => [...m, { role: "agent", text: "Run arrêté. La dernière version valide est conservée — dites-moi comment continuer." }]);
+    finalizedRef.current = messagesRef.current.length; // nouveau message au dernier index
   };
 
   return (

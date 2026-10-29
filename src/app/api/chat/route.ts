@@ -5,6 +5,7 @@
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
+  generateText,
   isStepCount,
   streamText,
   toUIMessageStream,
@@ -46,6 +47,95 @@ function maxSteps(): number {
 function maxCostUsd(): number {
   const raw = Number(process.env.AGENT_RUN_BUDGET_USD ?? "2");
   return Number.isFinite(raw) && raw > 0 ? raw : 2;
+}
+
+// Seuil de compaction auto (caractères JSON de l'historique) : au-delà, les
+// vieux échanges sont résumés et seuls les derniers sont gardés intacts.
+// Sans ça, renvoyer tout l'historique à chaque run coûte de plus en plus cher.
+function compactThresholdChars(): number {
+  const raw = Number(process.env.NIATOLIP_COMPACT_CHARS ?? "120000");
+  return Number.isFinite(raw) && raw > 0 ? raw : 120000;
+}
+
+const COMPACT_KEEP_LAST = 8;
+
+/** Ne garde que texte + dynamic-tool valides (ignore tout autre part client). */
+function sanitizeUiMessages(messages: UIMessage[]): UIMessage[] {
+  return messages
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && Array.isArray(m.parts))
+    .map((m) => ({
+      ...m,
+      parts: (m.parts as unknown[]).filter((p) => {
+        const part = p as Record<string, unknown>;
+        if (part.type === "text") return typeof part.text === "string";
+        return (
+          part.type === "dynamic-tool" &&
+          typeof part.toolName === "string" &&
+          typeof part.toolCallId === "string" &&
+          (part.state === "output-available" || part.state === "output-error")
+        );
+      }),
+    }))
+    .filter((m) => (m.parts as unknown[]).length > 0) as unknown as UIMessage[];
+}
+
+/**
+ * Compaction manuelle (doc 03 §5) : résume les vieux échanges via le modèle
+ * et ne garde que les derniers intacts. Invisible pour l'UI (reconstruit à
+ * chaque run, jamais persisté). Un seul appel LLM, seulement au-delà du seuil.
+ */
+async function maybeCompact(
+  model: ReturnType<typeof getModel>,
+  messages: UIMessage[]
+): Promise<UIMessage[]> {
+  if (messages.length <= COMPACT_KEEP_LAST + 2) return messages;
+  if (JSON.stringify(messages).length <= compactThresholdChars()) return messages;
+  console.log(`[agent] compaction auto : ${messages.length} messages → résumé + ${COMPACT_KEEP_LAST} intacts`);
+  const head = messages.slice(0, -COMPACT_KEEP_LAST);
+  const tail = messages.slice(-COMPACT_KEEP_LAST);
+  const digest = head
+    .map((m) => {
+      const texts = (m.parts as unknown[])
+        .filter((p) => (p as { type: string }).type === "text")
+        .map((p) => String((p as { text: unknown }).text ?? "").slice(0, 2000))
+        .join("\n");
+      const tools = (m.parts as unknown[])
+        .filter((p) => (p as { type: string }).type === "dynamic-tool")
+        .map(
+          (p) => {
+            const t = p as { toolName: string; input: unknown; output?: unknown; error?: string };
+            return `outil ${t.toolName} ${t.error ? `ERREUR ${t.error}` : "OK"} : ${JSON.stringify(t.input ?? null).slice(0, 300)} → ${JSON.stringify(t.output ?? null).slice(0, 800)}`;
+          }
+        )
+        .join("\n");
+      return `[${m.role}] ${texts}\n${tools}`;
+    })
+    .join("\n---\n")
+    .slice(0, 100000);
+  try {
+    const summary = await generateText({
+      model,
+      system: "Tu résumes fidèlement un historique de conception PCB pour reprise de contexte. Concis, factuel, en français.",
+      prompt:
+        "Résume cet historique (fichiers du projet, composants LCSC retenus avec références, résultats des gates G0–G3, décisions, erreurs rencontrées et comment elles ont été résolues, état actuel) en 30 lignes max. Ne rien inventer.\n\n" + digest,
+      maxOutputTokens: 2000,
+    });
+    const note = {
+      id: `compact-${Date.now()}`,
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: `[Résumé auto des runs précédents — contexte compacté]\n${summary.text.slice(0, 6000)}`,
+        },
+      ],
+    } as unknown as UIMessage;
+    return [note, ...tail];
+  } catch (err) {
+    // Résumé impossible : on envoie l'historique tel quel (mieux que rien).
+    console.error("[agent] compaction échouée :", err instanceof Error ? err.message : String(err));
+    return messages;
+  }
 }
 
 interface ChatBody {
@@ -112,6 +202,9 @@ export async function POST(req: Request) {
   );
 
   try {
+    // Mémoire inter-runs : l'historique complet (texte + appels d'outils)
+    // est renvoyé au modèle ; compacté au-delà du seuil (doc 03 §5).
+    const uiMessages = await maybeCompact(model, sanitizeUiMessages(body.messages));
     const result = streamText({
       model,
       // Annulation client (bouton Stop) + timeout ferme 14 min.
@@ -123,7 +216,7 @@ export async function POST(req: Request) {
         `Contexte run : projet "${project.name}" (${project.id}), modèle ${choice}.`,
         `Prompt version ${AGENT_PROMPT_VERSION}. Budget : ${costCap} USD max, ${max} étapes max.`,
       ].join("\n"),
-      messages: await convertToModelMessages(body.messages),
+      messages: await convertToModelMessages(uiMessages),
       tools,
       toolChoice: META_TOOL_CHOICE,
       stopWhen: [

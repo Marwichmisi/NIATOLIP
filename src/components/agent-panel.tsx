@@ -18,7 +18,18 @@ export const MODEL_VALUE_FOR_LABEL: Record<string, string> = {
   OpenAI: "openai-main",
 };
 
-export interface ChatMsg { role: "user" | "agent"; text: string }
+export interface ChatMsg {
+  role: "user" | "agent";
+  text: string;
+  /** Parties d'outils du run (mémoire inter-runs) — non affichées, renvoyées au run suivant. */
+  parts?: Array<{
+    toolName: string;
+    toolCallId: string;
+    input: unknown;
+    output?: unknown;
+    error?: string;
+  }>;
+}
 
 function StepIcon({ status }: { status: AgentStep["status"] }) {
   if (status === "done") return <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500"><Check className="h-3 w-3" /></span>;
