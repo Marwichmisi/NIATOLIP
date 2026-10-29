@@ -5,9 +5,11 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-# Cache BuildKit : un rebuild après échec reprend les tarballs déjà
-# téléchargés au lieu de tout re-fetcher (registre lent).
-RUN --mount=type=cache,target=/root/.npm npx -y npm@10.9.3 ci --legacy-peer-deps --no-audit --no-fund
+# Retries élevés : le registre peut réinitialiser les connexions sur les
+# gros arbres (tscircuit ~1500 paquets). Sans ça, `npm ci` abandonne.
+RUN --mount=type=cache,target=/root/.npm npx -y npm@10.9.3 ci \
+  --legacy-peer-deps --no-audit --no-fund \
+  --fetch-retries=10 --fetch-retry-mintimeout=30000 --fetch-retry-maxtimeout=180000
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
