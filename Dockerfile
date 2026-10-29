@@ -5,12 +5,9 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-# Cache BuildKit sur /root/.npm : en cas de coupure réseau (registre
-# distant parfois instable), le retry reprend les paquets déjà
-# téléchargés au lieu de repartir de zéro. Retries npm renforcés.
-RUN --mount=type=cache,target=/root/.npm \
-  npx -y npm@10.9.3 ci --legacy-peer-deps --no-audit --no-fund \
-  --fetch-retries=10 --fetch-retry-mintimeout=30000 --fetch-retry-maxtimeout=180000
+# Cache BuildKit : un rebuild après échec reprend les tarballs déjà
+# téléchargés au lieu de tout re-fetcher (registre lent).
+RUN --mount=type=cache,target=/root/.npm npx -y npm@10.9.3 ci --legacy-peer-deps --no-audit --no-fund
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
