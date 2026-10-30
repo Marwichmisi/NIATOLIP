@@ -39,6 +39,7 @@
 | [09-RISKS.md](./09-RISKS.md) | Risques, sécurité, conformité, plans de mitigation | Tous |
 | [10-WEBGPU.md](./10-WEBGPU.md) | Activation WebGPU (requis pour les viewers PCB/3D) : vérification, flags Linux, fallback sans GPU | Tous |
 | [11-BENCHMARK-M0.md](./11-BENCHMARK-M0.md) | Benchmark M0 (issue #2) : protocole, checklist providers, tableau et modèle par défaut | Tous |
+| [12-RAPPORT-AUDIT-GATES.md](./12-RAPPORT-AUDIT-GATES.md) | Audit des gates G0–G3 (cas Graetz réel) : verdicts prouvés, inventaire des checks natifs tscircuit, décision de migration complète vers le natif (issue #10), protocole anti-« gate menteuse » | Dev |
 
 ## Règle d'usage
 

@@ -4,6 +4,8 @@
 |---|---|
 | Principe | **Un DRC propre prouve que les règles géométriques sont respectées, pas que la carte fonctionnera.** Les gates réduisent le risque ; elles ne le suppriment pas. La validation humaine H2 reste obligatoire. |
 
+> **Décision du 2026-10-30 (audit, cas réel Graetz)** : les verdicts G0–G3 migrent **intégralement** vers les diagnostics natifs tscircuit (`*_error` du rendu + runners `@tscircuit/checks`) ; les gates fait-maison sont supprimées. Voir [12-RAPPORT-AUDIT-GATES.md](./12-RAPPORT-AUDIT-GATES.md), implémentation dans l'issue #10. En cas de contradiction entre ce document et le rapport, le rapport fait foi jusqu'à mise à jour de la présente page par l'issue #10.
+
 ---
 
 ## 1. Les gates
