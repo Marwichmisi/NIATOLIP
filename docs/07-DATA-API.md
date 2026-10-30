@@ -1,5 +1,7 @@
 # Données et API — NIATOLIP
 
+> **Statut V2 (2026-10-30) — partiellement supersédé.** Le stockage cible devient le **dossier projet source de vérité** (décision D19, [`15-PLAN-REFONTE-V2.md`](./15-PLAN-REFONTE-V2.md) §6.2) ; les tables `runs`/`component_cache` décrites ici n'existent pas dans le code, et le worker accède directement à la base contrairement à l'ancien contrat (question ouverte doc 15 §10). Ce document décrit l'état actuel tant que la phase P3 n'est pas implémentée. Réécriture prévue en P3.
+
 | Version | 1.0 — 2026-10-29 |
 |---|---|
 | Dépend de | `01-ARCHITECTURE.md`, `03-AGENT-TOOLS-LOOP.md` |

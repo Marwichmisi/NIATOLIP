@@ -1,94 +1,74 @@
 # Roadmap et backlog — NIATOLIP
 
-| Version | 1.0 — 2026-10-29 |
+| Version | 2.0 — 2026-10-30 (réécriture complète ; la version 1.0 du 2026-10-29 décrivait des jalons M0–M4 qui ne correspondent plus à l'état réel) |
 |---|---|
-| Règle | Aucun jalon n'est « terminé » sur une démo : il l'est sur ses critères d'acceptation mesurables, dont la fabrication réelle à partir de M2. |
+| Source de vérité V2 | `15-PLAN-REFONTE-V2.md` (diagnostic, décisions D16–D20, chantiers A–D) |
+| Règle | Aucune phase n'est « terminée » sur une démo : elle l'est sur ses critères d'acceptation mesurables. La fabrication réelle est le critère de P1. |
 
 ---
 
-## Jalons
+## État réel au 2026-10-30 (point de départ)
 
-### M0 — Preuve technique et benchmark modèles (avant tout produit)
+- **Livré et fonctionnel** : preview tscircuit réelle (RunFrame + eval WebWorker), agent complet (21 outils, H1/H2, streaming, 50 étapes), projets/versions/messages (Postgres ou fichiers JSON), worker KiCad Docker (ERC/DRC réels, pack Gerber/BOM/PnP), harnais corpus, templates T1–T3. Build vert.
+- **Non prouvé** : corpus R1–R5 à **0/5** (seul R1 exécuté, G3 rouge — probablement faux positif des gates maison) ; **0 carte fabriquée** ; modèle par défaut choisi sur un benchmark jouet à n=1 (ancien doc 11, supprimé).
+- **Connu faux** : gates G1/G3 maison (audit `12-RAPPORT-AUDIT-GATES.md`), migration native décidée mais non implémentée.
 
-Objectif : vérifier les hypothèses qui peuvent tuer le projet, sur le plus petit périmètre possible.
+L'ancien découpage M0–M4 est abandonné : M0 et l'infrastructure M1/M2 sont livrés, mais leurs portes de sortie probantes (corpus, fabrication) ne le sont pas. Les phases ci-dessous repartent de ce constat.
 
-| # | Tâche | Critère de sortie |
-|---|---|---|
-| M0-1 | Page Next.js minimale : chat AI SDK + `RunFrame` affichant un circuit tscircuit codé en dur | La preview PCB/schéma se met à jour quand le `fsMap` change |
-| M0-2 | Évaluation `@tscircuit/eval` en WebWorker + extraction erreurs/Circuit JSON résumé | Une erreur de code volontaire s'affiche structurée dans la page |
-| M0-3 | Provider Meta via `@ai-sdk/openai-compatible` (`muse-spark-1.3`) + provider OpenAI, modèle commutable par configuration | Le même agent jouet appelle un outil Zod sur les deux fournisseurs |
-| M0-4 | Vérifier les contraintes Meta du doc 02 §3.3 : `tool_choice: "auto"` uniquement, appels parallèles, streaming, **envoi d'image** (snapshot) | Checklist du doc 02 §7 intégralement cochée ou écarts documentés en ADR |
-| M0-5 | Benchmark : les 3 modèles (Spark 1.3, Wonder 1.0, OpenAI choisi) génèrent la carte jouet « ESP32-C3 + LED + bouton » avec la boucle d'outils minimale | Tableau : taux de builds verts, étapes moyennes, coût/run, latence. Le gagnant devient le modèle par défaut (décision Q3) |
+## Phases V2
 
-**Porte de sortie M0** : si aucun modèle n'atteint un build vert sur la carte jouet avec les outils de base, arrêter et réévaluer (prompt, conventions doc 04, ou périmètre) avant d'écrire le produit.
-
-### M1 — MVP logiciel (boucle agent complète, sans gate KiCad)
+### P0 — Jauges vraies (prérequis de tout)
 
 | # | Tâche | Critère de sortie |
 |---|---|---|
-| M1-1 | Projets + versions + persistance (doc 07, version locale acceptable) | Rouvrir un projet restaure fichiers, historique, preview (FR-12) |
-| M1-1b | `docker-compose.yml` : services `web` + `db` dès M1 (le service `worker` KiCad arrive en M2-1 dans la même composition), `.env.example` documenté | Un poste vierge avec Docker lance le produit par `docker compose up --build` sans aucune autre installation (décision Q1/D11) |
-| M1-2 | Catalogue d'outils doc 03 §3.1–3.3 (fichiers, composants jlcsearch, évaluation, checks G0–G3, snapshot) | L'agent réalise un run complet en autonomie bornée |
-| M1-3 | Gates H1 (plan) et H2 (revue sans export fab) + approbations AI SDK | Aucun run ne se termine « validé » sans clics explicites |
-| M1-4 | UX conforme au doc 06 (fil d'exécution, onglets, états d'erreur, Stop, budget) | Revue UX sur le parcours PRD §7 |
-| M1-5 | Corpus de régression automatisé v1 : les prompts des cartes R1–R5 exécutés en CI/nuit, métriques consignées | Rapport automatique : builds verts, gates, étapes, coût par carte |
-| M1-6 | Garde-fous : budget étapes/coût, arrêt, points de restauration | Tests sur runs volontairement pathologiques |
+| P0-1 | Migration G1–G3 vers `@tscircuit/checks` natif épinglé, suppression des heuristiques maison (`src/lib/agent-gates.ts`) | Cas Graetz de doc 12 vert sans contournement ; fixtures gates (sains + fautifs connus) vertes |
+| P0-2 | G5 scindée G5-PCB / G5-PCBA, PnP sans coordonnées = échec, couverture BOM ↔ composants comparée | Aucun faux vert PnP/stock reproduit sur fixtures |
+| P0-3 | Séquence imposée côté serveur : `g0g3` recalculé, H2 vérifiée avant export « validé », artefacts rouges non étiquetés « validé » | Appel API direct mensonger rejeté par test |
+| P0-4 | Clé de cache d'évaluation incluant les versions tscircuit/checks | Un changement de version invalide les verdicts |
+| P0-5 | PnP officiel `circuit-json-to-pnp-csv` dans le worker en remplacement du fallback maison sans coordonnées ; évaluation `@tscircuit/fabricator-drc` + `jlcpcb-manufacturing-specs` pour G5 (doc 15 §11) | PnP toujours coordonné ou échec explicite ; G5 appuyée sur les specs fabricant |
 
-**Porte de sortie M1** : ≥ 4 cartes du corpus sur 5 atteignent G3 vert sans modification manuelle du code, sur le modèle par défaut.
-
-### M2 — Fabrication réelle et gate KiCad
+### P1 — Preuve par le corpus et la fabrication
 
 | # | Tâche | Critère de sortie |
 |---|---|---|
-| M2-1 | Worker KiCad conteneurisé : export, `kicad-cli` ERC/DRC, gates G4/G5, pack fabrication (doc 05 §4) | Un job complet produit le pack + rapport pour R1 |
-| M2-2 | Templates vérifiés T1–T3 (doc 04 §4) construits et utilisés par l'agent | L'agent part des templates quand la demande correspond |
-| M2-3 | **Fabrication R1** (ESP32-C3 + BME280 + USB-C) chez JLCPCB, fiche de test écrite avant commande | Carte reçue et testée ; résultat consigné selon doc 05 §6 |
-| M2-4 | Fabrication R2 et R3 | Idem ; causes d'échec éventuelles transformées en règles/checks |
-| M2-5 | Outil datasheet (`getDatasheetSummary`) si les échecs M2 le justifient | Décision tracée (pas de développement spéculatif) |
+| P1-1 | Corpus R1–R5 complet sur jauges natives, historique doc 13 rempli, plafond coût appliqué au harnais | ≥ 4/5 cartes G0–G3 vertes |
+| P1-2 | Commande R1 chez JLCPCB, réception, test fonctionnel, registre doc 14 rempli | Une carte fabriquée qui fonctionne, consignée avec dates et résultats |
+| P1-3 | Mise à jour `00-PRD.md` (critères d'acceptation), `09-RISKS.md` (risques matérialisés) | Docs alignés sur les résultats réels, y compris négatifs |
 
-**Porte de sortie M2** = critères d'acceptation du MVP du PRD §11 (avec M3 pour l'utilisateur externe).
+### P2 — Liberté de l'agent (prompt en couches, sourcing découplé)
 
-### M3 — Pilotes externes
-
-| # | Tâche |
-|---|---|
-| M3-1 | Auth utilisateurs (prérequis au mode hébergé/public, décision Q2), quotas par utilisateur, budgets par défaut |
-| M3-2 | 5 à 10 utilisateurs pilotes (persona P1) sur cartes de leur choix dans le périmètre |
-| M3-3 | Collecte métriques PRD §10 ; revue des échecs un par un |
-| M3-4 | Durcissement : rate limits fournisseurs (429), reprises, files d'attente worker |
-
-### M4 — Après MVP (à prioriser selon les métriques, pas avant)
-
-- Cartes 4 couches dans le périmètre officiel.
-- Simulation SPICE ciblée (blocs d'alimentation simples).
-- Serveur MCP réexposant les outils.
-- Freerouting comme moteur de routage alternatif évaluable sur le corpus.
-- Bibliothèque de blocs vérifiés étendue (la croissance du catalogue prime sur l'élargissement du périmètre électrique).
-
----
-
-## Corpus de cartes de référence (référence pour benchmarks et régressions)
-
-| ID | Carte | Ce qu'elle prouve |
+| # | Tâche | Critère de sortie |
 |---|---|---|
-| R1 | ESP32-C3 + BME280 (I2C) + USB-C + LED | Chaîne complète : MCU, capteur I2C, alimentation USB-C — **carte de preuve n°1** |
-| R2 | RP2040 + flash + USB-C + boutons | Deuxième famille MCU, boot/reset |
-| R3 | Nœud capteur ESP32-C3 + connecteur I2C externe + connecteur batterie JST (charge exclue) | Connectique, usage « produit » |
-| R4 | Carte relais simple commandée en UART par connecteur externe (partie puissance limitée au périmètre basse tension) | Composant de sortie, pistes d'alimentation dimensionnées |
-| R5 | Afficheur simple : MCU + connecteur écran SPI + boutons | Bus SPI, connectique multiple |
+| P2-1 | Prompt cœur ≤ ~30 lignes + guidance outils générée + overlays modèle ; suppression du « processus obligatoire » | Corpus sans régression vs P1 |
+| P2-2 | Modes `plan`/`build` + sous-agents `review`/`explore`, permissions `allow/ask/deny` | Un run plan n'écrit aucun fichier ; l'export exige toujours `ask` |
+| P2-3 | Skills domaine (`tscircuit-syntax`, `sourcing-jlc`, `placement-routage`, `structuration`, `composants-custom`, `revue-fabrication`) chargés à la demande | Chaque skill chargé uniquement quand pertinent ; doc 04 devient source du skill syntaxe |
+| P2-4 | Statuts de sourcing `parts.json` (`verified/out_of_stock/generic/custom/missing`), mode d'assemblage par projet, échelle de repli | Un run avec composant hors stock aboutit à un export PCB nu correctement étiqueté ; réécriture de `03-AGENT-TOOLS-LOOP.md` et mise à jour de `02-MODELS-AI-SDK.md` |
+| P2-5 | Retrait ou refonte du benchmark jouet (`scripts/benchmark-models.ts`, `src/lib/toy-agent.ts`) | Plus aucun verdict produit fondé sur l'évaluateur statique jouet |
+| P2-6 | Catalogue jlcsearch complet (~55 tables servies vs 20 exposées) en donnée déclarative ; évaluation `digikeysearch.tscircuit.com` comme 2e source (doc 15 §11) | Les familles aujourd'hui absentes (capteurs, connecteurs, modules) sont cherchables ; décision 2e source consignée |
 
-Chaque carte du corpus possède : un prompt utilisateur canonique, une fiche de test fonctionnel, et un historique des résultats par version du produit (modèle, prompt, outils).
+### P3 — Mains de l'utilisateur (multi-fichiers, dossier projet, UI honnête)
 
-## Backlog priorisé (extrait prêt à ticket)
-
-| Priorité | Ticket | Doc source |
+| # | Tâche | Critère de sortie |
 |---|---|---|
-| P0 | Épingler les versions tscircuit/KiCad et les afficher dans les rapports | 01 §6, 05 §3 |
-| P0 | Interdire les variantes Meta `-contributor` par configuration (liste d'IDs autorisés) | 02 §1 |
-| P0 | Résumés d'outils bornés (jamais de Circuit JSON brut au modèle) | 03 §5 |
-| P0 | Refus hors périmètre propre via `reportOutOfScope` | 00 FR-15, 06 §4 |
-| P1 | Cache composants avec TTL et revérification stock en G5 | 07 §1, 05 G5 |
-| P1 | Points de restauration automatiques à G3 vert | 03 §5 |
-| P1 | Rapport de validation téléchargeable dans l'onglet Validation | 06 §3.1 |
-| P2 | ADR provider Meta « Responses API » si le benchmark montre un gain | 02 §3.3 point 5 |
-| P2 | Mode templates guidé dans l'écran de création de projet | 00 FR-14 |
+| P3-1 | `resolveEntrypoint()` partagé (corrige la preview alphabétique), convention multi-fichiers, spike fixture 2 fichiers | Fixture vert navigateur + serveur |
+| P3-2 | Dossier projet source de vérité (`project.json`, `src/`, `versions/`, `reports/`, `artifacts/`, `conversation.jsonl`), index Postgres, script de migration des JSON existants, verrou par projet | Projet migré sans perte (égalité vérifiée), ouvrable dans un éditeur externe |
+| P3-3 | UI : éditeur de code + diff, onglet Validation branché sur les jobs réels, BOM réelle depuis `parts.json`, suppression des surfaces simulées | Zéro donnée simulée affichée ; un spécialiste corrige le code de l'agent sans passer par le chat |
+| P3-4 | Réécriture de `07-DATA-API.md`, mise à jour de `01-ARCHITECTURE.md` et `06-UX-SPEC.md` ; décision worker ↔ base (question ouverte doc 15 §10) | Docs = code |
+| P3-5 | Import KiCad via `kicad-to-circuit-json` / `circuit-json-to-tscircuit` (+ convertisseurs de footprints EasyEDA/KiCad) — avancé de P4 (doc 15 §11) | Un projet KiCad existant s'importe en projet NIATOLIP évaluable |
+
+### P4 — Ouverture (publication open source)
+
+| # | Tâche | Critère de sortie |
+|---|---|---|
+| P4-1 | LICENSE, nom public (D14), README d'installation complet et honnête, CI (build + fixtures + dry-runs), dépendances `"latest"` épinglées, script `lint` réparé | Un tiers installe depuis le README seul ; CI verte |
+| P4-2 | Auth + quotas (avant toute instance partagée), durcissement worker (egress, jobs orphelins, secrets par défaut) | Aucune route sensible sans contrôle d'accès |
+| P4-3 | Provider générique compatible OpenAI | Un modèle local se configure sans modifier le code |
+
+## Backlog (non phasé, par valeur décroissante)
+
+- Outil datasheet : récupération + extraction pinout, confirmation visuelle pin 1 avant H2.
+- Catalogue composants élargi au-delà des 20 catégories actuelles ; équivalents automatiques multi-sources.
+- Freerouting en option si l'autorouteur tscircuit plafonne sur le corpus (critères doc 09).
+- Cartes 4 couches (aujourd'hui `layers` est un littéral dans types et templates).
+- SPICE sur les blocs analogiques simples (dépendances déjà présentes, jamais utilisées).
+- i18n de l'UI (aujourd'hui français codé en dur) — condition d'une communauté internationale.

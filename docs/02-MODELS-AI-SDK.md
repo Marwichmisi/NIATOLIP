@@ -1,5 +1,7 @@
 # Modèles IA — Meta Model API + OpenAI via Vercel AI SDK
 
+> **Statut V2 (2026-10-30) — à mettre à jour en phase P2.** Écarts connus avec le code : checklist §7 jamais cochée ; repli OpenAI `gpt-5-mini` codé en dur (`src/lib/models.ts`) contrairement à la règle « aucun ID figé » ; budget de run inopérant côté OpenAI (prix à 0) ; modèle par défaut hérité d'un benchmark jouet à n=1 (ancien doc 11, supprimé — voir [`15-PLAN-REFONTE-V2.md`](./15-PLAN-REFONTE-V2.md) §8). Les contraintes Meta (`tool_choice: "auto"`, pas de `-contributor` par défaut) restent en vigueur.
+
 | Version | 1.0 — 2026-10-29 |
 |---|---|
 | Sources vérifiées | dev.meta.ai/docs (models, tool-calling, pricing) ; AI SDK (`/vercel/ai` sur Context7) |

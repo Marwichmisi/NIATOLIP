@@ -2,10 +2,13 @@
 
 Outil web agentique de création de PCB. **Lire `docs/README.md` avant toute décision** : les décisions D1–D15 y sont validées et ne se rouvrent pas sans ADR (`docs/ADR-XXX.md`). Toute contradiction doc ↔ code se corrige dans la même PR.
 
-## État actuel (ne pas confondre prototype et produit)
+## État actuel (mis à jour le 2026-10-30 — ne pas confondre livré et prouvé)
 
-- Seul l'**écran principal UI** existe : Next.js + données **simulées** (`src/data/mock.ts`, simulation par timers dans `src/app/page.tsx`). Aucun backend, aucun agent, aucun tscircuit réel pour l'instant.
-- Prochaine étape : jalon M0 de `docs/08-ROADMAP-BACKLOG.md` (vraie preview tscircuit + benchmark modèles).
+- **Livré et fonctionnel** : preview tscircuit réelle (RunFrame + eval WebWorker), agent complet (21 outils, gates H1/H2, streaming, plafond 50 étapes — `src/lib/agent-run.ts`), projets/versions/messages (Postgres ou fichiers JSON — `src/lib/projects.ts`), worker KiCad Docker avec ERC/DRC réels (`worker/`), harnais corpus (`scripts/corpus.ts`), templates T1–T3 (`src/lib/templates.ts`). Build vert.
+- **Non prouvé — c'est le manque central** : corpus R1–R5 à **0/5** (seul R1 exécuté, G3 rouge probablement faux positif), **aucune carte fabriquée** (registre `docs/14` vide). Aucun template n'est « vérifié » au sens de `docs/04`/`docs/05`.
+- **Connu faux** : gates G1/G3 maison (`src/lib/agent-gates.ts`) — migration native `@tscircuit/checks` décidée (`docs/12`) mais **non implémentée**. Ne pas optimiser prompt ou modèle avant cette migration.
+- **Surfaces encore simulées dans l'UI** : BOM d'aperçu (`src/data/mock.ts` via `src/components/preview-panel.tsx`), onglet Validation figé, badge « Checks OK » permanent. Ne pas les présenter comme réelles.
+- **Refonte V2 validée le 2026-10-30** : lire `docs/15-PLAN-REFONTE-V2.md` (décisions D16–D20 : prompt en couches, sourcing découplé, multi-fichiers, dossier projet source de vérité). Prochaine étape : **phase P0** de `docs/08-ROADMAP-BACKLOG.md` (jauges vraies), pas de nouvelle fonctionnalité avant.
 - `Sans-titre-2026-10-27-0122.png` = la maquette d'origine du produit.
 
 ## Commandes
@@ -44,6 +47,7 @@ npm run build   # seule vérification disponible : doit être vert avant commit
 - Meta Model API : `tool_choice` vaut toujours `"auto"` (le reste renvoie HTTP 400) ; variantes de modèles `-contributor` **interdites** (données d'entraînement Meta). Clés API uniquement côté serveur (`docs/02-MODELS-AI-SDK.md` §6 pour les variables).
 - `kicad-cli` ne vit **que** dans le worker Docker côté serveur — jamais sur le PC de l'utilisateur, jamais dans l'image Next.js. Lancement cible : `docker compose up --build` (`docs/01-ARCHITECTURE.md` §3.4).
 - Périmètre MVP : cartes 2 couches basse vitesse, composants **JLCPCB/LCSC vérifiés par outil** — un agent ne doit jamais inventer une référence LCSC, un MPN ou un footprint (`docs/04-TSCIRCUIT-RULES.md`). Aucun export « validé » sans les gates G0–G5 (`docs/05-VALIDATION-FABRICATION.md`).
+- **Cible V2 (doc 15, non encore implémentée — ne pas la décrire comme acquise)** : le stock JLCPCB ne bloque que l'assemblage PCBA, jamais la conception ni l'export PCB nu (décision D17) ; les projets passeront en dossiers source de vérité (D19). Tant que le code n'a pas bougé, le comportement actuel fait foi.
 
 ## Git
 

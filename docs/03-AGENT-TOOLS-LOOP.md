@@ -1,5 +1,7 @@
 # Agent — boucle, outils et garde-fous
 
+> **Statut V2 (2026-10-30) — partiellement supersédé.** Le « processus obligatoire » et l'organisation actuelle du prompt sont remplacés par la cible de [`15-PLAN-REFONTE-V2.md`](./15-PLAN-REFONTE-V2.md) §3 (prompt en couches, modes `plan`/`build`, permissions, skills — décision D16). Les contrats d'outils et les garde-fous décrits ici restent la référence du code actuel tant que la phase P2 n'est pas implémentée. Réécriture prévue en P2.
+
 | Version | 1.0 — 2026-10-29 |
 |---|---|
 | Dépend de | `01-ARCHITECTURE.md`, `02-MODELS-AI-SDK.md`, `04-TSCIRCUIT-RULES.md`, `05-VALIDATION-FABRICATION.md` |
