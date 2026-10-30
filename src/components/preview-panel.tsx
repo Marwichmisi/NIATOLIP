@@ -92,7 +92,7 @@ export function PreviewPanel({
       .catch((e) => {
         if (cancelled) return;
         setFatal(e instanceof Error ? e.message : String(e));
-        setCircuitJson([]);
+        // Dernier rendu valide conservé (doc 06 §3.2) : on ne vide pas circuitJson.
         setEvaluating(false);
       });
     return () => {
@@ -191,6 +191,11 @@ export function PreviewPanel({
       </div>
 
       <div className={cn("relative min-h-0 flex-1", view ? "overflow-hidden" : "overflow-auto p-4")}>
+        {view && (runErrors.length > 0 || fatal) && (
+          <p className="shrink-0 border-b border-amber-500/40 bg-amber-500/10 px-4 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+            Modifications en erreur — dernier rendu valide affiché, voir l'étape en cours.
+          </p>
+        )}
         {view && (
           <div className="relative flex h-full w-full flex-col">
             <div className="preview-canvas min-h-0 w-full flex-1">

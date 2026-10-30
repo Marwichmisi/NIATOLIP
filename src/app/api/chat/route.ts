@@ -60,6 +60,17 @@ function compactThresholdChars(): number {
 const COMPACT_KEEP_LAST = 8;
 
 /** Ne garde que texte + dynamic-tool valides (ignore tout autre part client). */
+// Les états d'approbation (approval-requested/responded) transitent intacts :
+// la reprise après clic « Approuver »/« Refuser » les renvoie au modèle qui
+// les convertit en tool-approval-response (doc AI SDK, 2ᵉ appel).
+const APPROVAL_TOOL_STATES = new Set([
+  "output-available",
+  "output-error",
+  "approval-requested",
+  "approval-responded",
+  "output-denied",
+]);
+
 function sanitizeUiMessages(messages: UIMessage[]): UIMessage[] {
   return messages
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && Array.isArray(m.parts))
@@ -72,7 +83,7 @@ function sanitizeUiMessages(messages: UIMessage[]): UIMessage[] {
           part.type === "dynamic-tool" &&
           typeof part.toolName === "string" &&
           typeof part.toolCallId === "string" &&
-          (part.state === "output-available" || part.state === "output-error")
+          APPROVAL_TOOL_STATES.has(part.state as string)
         );
       }),
     }))
@@ -103,7 +114,17 @@ async function maybeCompact(
         .filter((p) => (p as { type: string }).type === "dynamic-tool")
         .map(
           (p) => {
-            const t = p as { toolName: string; input: unknown; output?: unknown; error?: string };
+            const t = p as {
+              toolName: string;
+              input: unknown;
+              output?: unknown;
+              error?: string;
+              state?: string;
+              approval?: { approved?: boolean };
+            };
+            if (t.state === "approval-responded") {
+              return `approbation ${t.toolName} ${t.approval?.approved === false ? "REFUSÉE" : "approuvée"} : ${JSON.stringify(t.input ?? null).slice(0, 300)}`;
+            }
             return `outil ${t.toolName} ${t.error ? `ERREUR ${t.error}` : "OK"} : ${JSON.stringify(t.input ?? null).slice(0, 300)} → ${JSON.stringify(t.output ?? null).slice(0, 800)}`;
           }
         )
@@ -219,6 +240,14 @@ export async function POST(req: Request) {
       messages: await convertToModelMessages(uiMessages),
       tools,
       toolChoice: META_TOOL_CHOICE,
+      // Gates H1/H2/export : suspension jusqu'au clic explicite de
+      // l'utilisateur (doc 03 §3.5, doc 06 §2.2). Jamais d'approbation
+      // implicite : seul le bouton « Approuver » reprend le run.
+      toolApproval: {
+        requestPlanApproval: "user-approval",
+        requestFinalApproval: "user-approval",
+        exportPack: "user-approval",
+      },
       stopWhen: [
         isStepCount(max),
         // Plafond de coût : lecture du cumul tenu dans onStepEnd (≤1 étape de dépassement).

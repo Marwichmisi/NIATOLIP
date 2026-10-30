@@ -1,10 +1,16 @@
-export type StepStatus = "done" | "running" | "pending" | "error";
+export type StepStatus = "done" | "running" | "pending" | "error" | "awaiting" | "denied";
 
 export interface AgentStep {
   id: string;
   label: string;
   detail: string;
   status: StepStatus;
+  /** Nom de l'outil d'origine (reportOutOfScope → style hors-périmètre, gates H1/H2…). */
+  tool?: string;
+  /** Résumé JSON brut dépliable (jamais affiché par défaut, doc 06 §2.1). */
+  raw?: string;
+  /** Horodatage de début (ms) pour la durée « en cours … N s ». */
+  startedAt?: number;
 }
 
 export const INITIAL_STEPS: AgentStep[] = [

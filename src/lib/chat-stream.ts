@@ -1,8 +1,11 @@
 // Client du run agent : envoie le run à POST /api/chat et parse le flux
 // UIMessage (SSE `data: {...}`). Sans @ai-sdk/react (dépendance évitée) :
-// parseur minimal couvrant texte + cycle de vie des outils.
+// parseur minimal couvrant texte + cycle de vie des outils + approbations.
 // La mémoire inter-runs passe par ici : chaque message agent embarque ses
 // parties d'outils (dynamic-tool), renvoyées au run suivant et persistées.
+// Les gates H1/H2/export suspendent le run (toolApproval 'user-approval') :
+// le stream se termine sur `tool-approval-request`, l'UI affiche la carte,
+// puis un second POST reprend le run avec la réponse d'approbation.
 "use client";
 
 export interface ToolPartIn {
@@ -11,6 +14,8 @@ export interface ToolPartIn {
   input: unknown;
   output?: unknown;
   error?: string;
+  /** Réponse d'approbation (reprise H1/H2/export) — renvoyée au run suivant. */
+  approval?: { id: string; approved: boolean };
 }
 
 export interface ChatMsgIn {
@@ -19,11 +24,27 @@ export interface ChatMsgIn {
   parts?: ToolPartIn[];
 }
 
+export interface ApprovalRequest {
+  approvalId: string;
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  reason?: string;
+}
+
 export interface StreamCallbacks {
   onText: (fullText: string) => void;
-  onToolStart: (toolName: string, toolCallId: string) => void;
-  onToolEnd: (toolName: string, ok: boolean, detail: string) => void;
+  onToolStart: (toolName: string, toolCallId: string, input: unknown) => void;
+  onToolEnd: (
+    toolName: string,
+    toolCallId: string,
+    ok: boolean,
+    detail: string,
+    raw: string
+  ) => void;
+  onApprovalRequest: (approval: ApprovalRequest) => void;
   onError: (message: string) => void;
+  onFinish?: (finishReason: string) => void;
 }
 
 type UIMessagePartOut =
@@ -32,10 +53,11 @@ type UIMessagePartOut =
       type: "dynamic-tool";
       toolName: string;
       toolCallId: string;
-      state: "output-available" | "output-error";
+      state: "output-available" | "output-error" | "approval-responded";
       input: unknown;
       output?: unknown;
       errorText?: string;
+      approval?: { id: string; approved: boolean };
     };
 
 interface UIMessageOut {
@@ -50,11 +72,22 @@ function toUIMessages(msgs: ChatMsgIn[]): UIMessageOut[] {
     if (m.role === "agent" && Array.isArray(m.parts)) {
       for (const p of m.parts.slice(0, 100)) {
         if (!p || typeof p.toolName !== "string" || typeof p.toolCallId !== "string") continue;
-        if (typeof p.error === "string") {
+        const name = p.toolName.slice(0, 80);
+        const id = p.toolCallId.slice(0, 80);
+        if (p.approval) {
           parts.push({
             type: "dynamic-tool",
-            toolName: p.toolName.slice(0, 80),
-            toolCallId: p.toolCallId.slice(0, 80),
+            toolName: name,
+            toolCallId: id,
+            state: "approval-responded",
+            input: p.input ?? null,
+            approval: { id: p.approval.id.slice(0, 80), approved: p.approval.approved },
+          });
+        } else if (typeof p.error === "string") {
+          parts.push({
+            type: "dynamic-tool",
+            toolName: name,
+            toolCallId: id,
             state: "output-error",
             input: p.input ?? null,
             errorText: p.error.slice(0, 2000),
@@ -62,8 +95,8 @@ function toUIMessages(msgs: ChatMsgIn[]): UIMessageOut[] {
         } else {
           parts.push({
             type: "dynamic-tool",
-            toolName: p.toolName.slice(0, 80),
-            toolCallId: p.toolCallId.slice(0, 80),
+            toolName: name,
+            toolCallId: id,
             state: "output-available",
             input: p.input ?? null,
             output: p.output ?? null,
@@ -89,10 +122,20 @@ function toolDetail(name: string, output: unknown): string {
       const errs = o.findings.filter((f: unknown) => (f as { severity: string }).severity === "error").length;
       return errs === 0 ? "0 erreur" : `${errs} erreur(s)`;
     }
+    if (typeof o.next === "string") return o.next.slice(0, 160);
     if (typeof o.message === "string") return o.message.slice(0, 160);
     if (o.ok === true) return "OK";
   }
   return "";
+}
+
+function rawOf(value: unknown): string {
+  try {
+    const s = JSON.stringify(value ?? null);
+    return s.length > 4000 ? `${s.slice(0, 4000)}\n…[tronqué]` : s;
+  } catch {
+    return "[non sérialisable]";
+  }
 }
 
 export async function streamChat(opts: {
@@ -102,7 +145,13 @@ export async function streamChat(opts: {
   clientBoard: Record<string, unknown> | null;
   signal: AbortSignal;
   cb: StreamCallbacks;
-}): Promise<{ text: string; runId: string | null; parts: ToolPartIn[] }> {
+}): Promise<{
+  text: string;
+  runId: string | null;
+  parts: ToolPartIn[];
+  pendingApproval: ApprovalRequest | null;
+  finishReason: string | null;
+}> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -124,6 +173,8 @@ export async function streamChat(opts: {
   const decoder = new TextDecoder();
   let buffer = "";
   let text = "";
+  let finishReason: string | null = null;
+  let pendingApproval: ApprovalRequest | null = null;
   const toolNames = new Map<string, string>();
   const toolInputs = new Map<string, unknown>();
   const parts: ToolPartIn[] = [];
@@ -136,9 +187,10 @@ export async function streamChat(opts: {
     } else if (type === "tool-input-available") {
       const id = String(chunk.toolCallId ?? "");
       const name = String(chunk.toolName ?? "outil");
+      const input = (chunk.input as unknown) ?? null;
       toolNames.set(id, name);
-      toolInputs.set(id, (chunk.input as unknown) ?? null);
-      opts.cb.onToolStart(name, id);
+      toolInputs.set(id, input);
+      opts.cb.onToolStart(name, id, input);
     } else if (type === "tool-output-available") {
       const id = String(chunk.toolCallId ?? "");
       const name = toolNames.get(id) ?? "outil";
@@ -150,7 +202,7 @@ export async function streamChat(opts: {
         input: toolInputs.get(id) ?? null,
         ...(err ? { error: String(err).slice(0, 2000) } : { output: output ?? null }),
       });
-      opts.cb.onToolEnd(name, !err, toolDetail(name, output));
+      opts.cb.onToolEnd(name, id, !err, toolDetail(name, output), rawOf(output));
     } else if (type === "tool-input-error") {
       const id = String(chunk.toolCallId ?? "");
       const name = String(chunk.toolName ?? toolNames.get(id) ?? "outil");
@@ -160,7 +212,33 @@ export async function streamChat(opts: {
         input: toolInputs.get(id) ?? chunk.input ?? null,
         error: String(chunk.errorText ?? "entrée invalide").slice(0, 2000),
       });
-      opts.cb.onToolEnd(name, false, String(chunk.errorText ?? "entrée invalide").slice(0, 160));
+      opts.cb.onToolEnd(name, id, false, String(chunk.errorText ?? "entrée invalide").slice(0, 160), rawOf(chunk.input));
+    } else if (type === "tool-approval-request") {
+      // Le run est suspendu : aucun output ne suivra pour cet appel sans
+      // réponse explicite (bouton Approuver/Modifier dans l'UI).
+      const id = String(chunk.toolCallId ?? "");
+      const approval: ApprovalRequest = {
+        approvalId: String(chunk.approvalId ?? ""),
+        toolCallId: id,
+        toolName: toolNames.get(id) ?? "outil",
+        input: toolInputs.get(id) ?? null,
+        reason: typeof chunk.reason === "string" ? chunk.reason.slice(0, 300) : undefined,
+      };
+      pendingApproval = approval;
+      opts.cb.onApprovalRequest(approval);
+    } else if (type === "tool-output-denied") {
+      const id = String(chunk.toolCallId ?? "");
+      const name = toolNames.get(id) ?? "outil";
+      parts.push({
+        toolName: name,
+        toolCallId: id,
+        input: toolInputs.get(id) ?? null,
+        error: "Approbation refusée par l'utilisateur.",
+      });
+      opts.cb.onToolEnd(name, id, false, "Refusé — en attente de vos modifications", rawOf({ denied: true }));
+    } else if (type === "finish") {
+      finishReason = typeof chunk.finishReason === "string" ? chunk.finishReason : "stop";
+      opts.cb.onFinish?.(finishReason);
     } else if (type === "error") {
       opts.cb.onError(String(chunk.errorText ?? "Erreur de stream").slice(0, 300));
     }
@@ -184,5 +262,5 @@ export async function streamChat(opts: {
       }
     }
   }
-  return { text, runId, parts };
+  return { text, runId, parts, pendingApproval, finishReason };
 }

@@ -97,8 +97,15 @@ function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
 
 const ALLOWED_EXT = [".tsx", ".ts", ".json", ".md"];
 const MAX_TOOL_CONTENT = 100_000;
+// Fichier réservé : traçabilité des recherches JLCPCB du projet (doc 03 §3.2).
+// Persisté dans la copie de travail, invisible au modèle (hors listFiles,
+// hors hash d'éval) pour survivre aux runs, reprises et restarts.
+const SEARCH_LOG_PATH = ".agent-searches.json";
 
 function validatePath(path: string): void {
+  if (typeof path === "string" && (path === SEARCH_LOG_PATH || path.startsWith("."))) {
+    throw new Error(`Chemin réservé : "${path}".`);
+  }
   if (typeof path !== "string" || path.length === 0 || path.length > 120) {
     throw new Error(`Chemin invalide : "${path}".`);
   }
@@ -129,6 +136,7 @@ function hashFiles(files: Record<string, string>, entrypoint: string): string {
   const h = createHash("sha256");
   h.update(`entry:${entrypoint}\n`);
   for (const k of Object.keys(files).sort()) {
+    if (k.startsWith(".")) continue; // fichiers réservés hors contenu circuit
     h.update(`--- ${k} ---\n`);
     h.update(files[k]);
     h.update("\n");
@@ -175,6 +183,52 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
     return getWorkingFiles(ctx.projectId);
   }
 
+  // Traçabilité projet (et non run) : les LCSC cherchés survivent aux
+  // reprises d'itération, aux approbations H1/H2 (nouveau run serveur) et
+  // aux restarts. Sans ça, getCircuitSummary crierait « untraced » au run 2.
+  let searchesLoaded = false;
+  async function ensureSearches(): Promise<void> {
+    if (searchesLoaded) return;
+    searchesLoaded = true;
+    try {
+      const files = await readAll();
+      const raw = files[SEARCH_LOG_PATH];
+      if (typeof raw !== "string") return;
+      const list = JSON.parse(raw) as Array<{ lcsc?: unknown; category?: unknown; at?: unknown }>;
+      if (!Array.isArray(list)) return;
+      for (const r of list.slice(-500)) {
+        if (typeof r.lcsc === "string" && !state.searchedLcsc.has(r.lcsc)) {
+          state.searchedLcsc.set(r.lcsc, {
+            category: typeof r.category === "string" ? r.category : "?",
+            at: typeof r.at === "string" ? r.at : "?",
+          });
+        }
+      }
+    } catch {
+      // Log illisible : on repart du run courant (jamais bloquant).
+    }
+  }
+
+  async function recordSearches(rows: Array<{ lcsc: string; category: string }>): Promise<void> {
+    try {
+      const files = await readAll();
+      let list: Array<{ lcsc: string; category: string; at: string }> = [];
+      try {
+        const parsed: unknown = JSON.parse(files[SEARCH_LOG_PATH] ?? "[]");
+        if (Array.isArray(parsed)) list = parsed as typeof list;
+      } catch {
+        list = [];
+      }
+      const at = new Date().toISOString();
+      for (const r of rows) {
+        if (!list.some((e) => e.lcsc === r.lcsc)) list.push({ ...r, at });
+      }
+      await putWorkingFiles(ctx.projectId, { ...files, [SEARCH_LOG_PATH]: JSON.stringify(list.slice(-500)) });
+    } catch {
+      // Persistance best-effort : la traçabilité mémoire du run reste valide.
+    }
+  }
+
   async function ensureFull(
     files: Record<string, string>,
     entrypoint: string
@@ -203,7 +257,9 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
       execute: async () => {
         const files = await readAll();
         return {
-          files: Object.entries(files).map(([path, content]) => ({ path, bytes: content.length })),
+          files: Object.entries(files)
+            .filter(([p]) => !p.startsWith("."))
+            .map(([path, content]) => ({ path, bytes: content.length })),
         };
       },
     }),
@@ -267,12 +323,16 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         "OBLIGATOIRE avant tout choix de composant principal : recherche réelle JLCPCB (stock, prix, Basic/Preferred).",
       inputSchema: searchComponentsSchema,
       execute: async (input) => {
+        await ensureSearches();
         const result = await searchComponents(input);
+        const fresh: Array<{ lcsc: string; category: string }> = [];
         for (const c of result.candidates) {
           if (!state.searchedLcsc.has(c.lcscId)) {
             state.searchedLcsc.set(c.lcscId, { category: input.category, at: new Date().toISOString() });
+            fresh.push({ lcsc: c.lcscId, category: input.category });
           }
         }
+        if (fresh.length > 0) await recordSearches(fresh);
         state.searchLog.push({
           category: input.category,
           filters: JSON.stringify(input.filters ?? {}),
@@ -394,6 +454,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
       description: "Netlist lisible compacte + traçabilité sourcing (parts.json vs recherches du run). Jamais de JSON brut.",
       inputSchema: z.object({}),
       execute: async () => {
+        await ensureSearches();
         const files = await readAll();
         const { summary, json } = await ensureFull(files, resolveEntrypoint(files));
         const lines: string[] = [];
@@ -428,6 +489,96 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
                 ? `BLOQUANT : ${untraced.join(", ")} sans searchComponents dans ce run — chercher ou retirer (doc 04 règle 1).`
                 : "OK : chaque LCSC déclaré est traçable à une recherche du run.",
           },
+        };
+      },
+    }),
+
+    // ----- Gates humaines H1/H2 + export (doc 03 §3.5, doc 06 §2.2) -----
+    // Exécution suspendue jusqu'à décision explicite via `toolApproval`
+    // (route chat) : aucun clic = aucun passage de gate. Le refus renvoie
+    // un output-denied — le modèle demande alors quoi modifier.
+
+    requestPlanApproval: tool({
+      description:
+        "GATE H1 — OBLIGATOIRE avant toute génération : présente le plan (architecture, composants pressentis avec LCSC si déjà sourcés, dimensions, couches, estimation de coût) et SUSPEND le run jusqu'à l'approbation explicite de l'utilisateur. Ne jamais générer avant son retour.",
+      inputSchema: z.object({
+        title: z.string().min(1).max(120).describe("Titre du plan."),
+        objective: z.string().min(1).max(1000).describe("Ce qui va être construit, en une phrase."),
+        components: z
+          .array(
+            z.object({
+              ref: z.string().max(20).describe("Repère (U1, R3…)."),
+              value: z.string().max(80).describe("Valeur ou fonction."),
+              lcsc: z.string().max(12).optional().describe("LCSC si déjà sourcé, sinon absent."),
+              mpn: z.string().max(80).optional(),
+              role: z.string().max(120).optional().describe("Rôle dans le circuit."),
+            })
+          )
+          .max(30)
+          .default([]),
+        board: z
+          .object({
+            widthMm: z.number().positive().max(500),
+            depthMm: z.number().positive().max(500),
+            layers: z.number().int().min(1).max(4),
+          })
+          .optional()
+          .describe("Dimensions et couches."),
+        costEstimateUsd: z.number().nonnegative().max(10000).optional().describe("Estimation composants en USD."),
+        notes: z.string().max(1000).optional().describe("Points à valider humainement."),
+      }),
+      execute: async (input) => ({
+        approved: true,
+        at: new Date().toISOString(),
+        plan: input.title,
+        next: "Plan approuvé — générer : sourcing, code, évaluation G0–G3.",
+      }),
+    }),
+
+    requestFinalApproval: tool({
+      description:
+        "GATE H2 — OBLIGATOIRE avant export : présente la revue finale (BOM chiffrée avec LCSC/stock/prix issus de searchComponents, état des gates G0–G3, limites) et SUSPEND le run jusqu'à l'approbation explicite. N'appeler qu'à gates G0–G3 vertes.",
+      inputSchema: z.object({
+        summary: z.string().min(1).max(1000).describe("Ce qui a été construit, en une phrase."),
+        bom: z
+          .array(
+            z.object({
+              ref: z.string().max(20),
+              value: z.string().max(80),
+              pkg: z.string().max(30).optional().describe("Boîtier."),
+              lcsc: z.string().max(12),
+              stock: z.number().int().nonnegative().nullable().optional().describe("Stock JLCPCB (null = inconnu)."),
+              price: z.number().nonnegative().nullable().optional().describe("Prix unitaire USD."),
+            })
+          )
+          .max(100),
+        gates: z
+          .array(z.object({ gate: z.string().max(4), status: z.string().max(12), note: z.string().max(200).optional() }))
+          .max(8)
+          .describe("État G0–G3 (vertes exigées)."),
+        limits: z.array(z.string().max(300)).max(10).default([]).describe("Limites et points à vérifier humainement."),
+      }),
+      execute: async (input) => ({
+        approved: true,
+        at: new Date().toISOString(),
+        items: input.bom.length,
+        next: "Revue approuvée — appeler exportPack.",
+      }),
+    }),
+
+    exportPack: tool({
+      description:
+        "EXPORT — après requestFinalApproval approuvée uniquement. Crée un snapshot versionné et prépare l'archive du projet (M1 : sources + BOM ; Gerber/DRC au M2 via worker KiCad). L'utilisateur approuve explicitement le téléchargement.",
+      inputSchema: z.object({
+        note: z.string().max(200).optional().describe("Note d'export."),
+      }),
+      execute: async ({ note }) => {
+        const v = await createVersion(ctx.projectId, `Export M1${note ? ` — ${note}` : ""}`);
+        return {
+          ok: true,
+          snapshot: `v${v.version_no}`,
+          download: `/api/projects/${ctx.projectId}/export`,
+          note: "M1 : archive des sources + BOM (Gerber/DRC au M2, worker KiCad).",
         };
       },
     }),
