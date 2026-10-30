@@ -247,6 +247,7 @@ export async function POST(req: Request) {
         requestPlanApproval: "user-approval",
         requestFinalApproval: "user-approval",
         exportPack: "user-approval",
+        exportManufacturingPack: "user-approval",
       },
       stopWhen: [
         isStepCount(max),

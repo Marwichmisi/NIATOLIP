@@ -193,10 +193,23 @@ export function AgentPanel({
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
               <p className="text-[13px] font-medium">Gate export — approbation requise</p>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Télécharger l'archive du projet (sources + BOM). M1 : pas de Gerber — le DRC KiCad arrive au M2.
+                Télécharger l'archive des sources (NON VALIDÉE — sans Gerber ni DRC KiCad).
+                Le pack fabrication validé passe par l'outil pack G4/G5.
               </p>
               <div className="mt-2.5 flex gap-2">
                 <Button size="sm" onClick={onApprove}><Download /> Approuver l'export</Button>
+                <Button size="sm" variant="outline" onClick={denyAndEdit}><Pencil /> Refuser</Button>
+              </div>
+            </div>
+          )}
+          {pendingApproval?.toolName === "exportManufacturingPack" && (
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-[13px] font-medium">Pack fabrication validé — approbation requise</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Télécharger le pack G4/G5 vert (gerber.zip, bom.csv, pnp.csv, project-kicad.zip, sources.zip, validation-report.md).
+              </p>
+              <div className="mt-2.5 flex gap-2">
+                <Button size="sm" onClick={onApprove}><Download /> Approuver le pack</Button>
                 <Button size="sm" variant="outline" onClick={denyAndEdit}><Pencil /> Refuser</Button>
               </div>
             </div>

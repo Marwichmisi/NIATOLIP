@@ -77,6 +77,42 @@ create table if not exists messages (
 );
 create index if not exists idx_versions_project on project_versions(project_id, version_no);
 create index if not exists idx_messages_conv on messages(conversation_id, created_at, id);
+-- M2 (issue #7) : jobs du worker KiCad (G4/G5) + artefacts du pack fabrication.
+create table if not exists validation_jobs (
+  id text primary key,
+  project_id text not null references projects(id) on delete cascade,
+  version_id text,
+  version_no integer,
+  label text not null default '',
+  status text not null default 'queued',
+  worker text,
+  kicad_version text,
+  tscircuit_version text,
+  files_snapshot jsonb not null default '{}',
+  g0g3 jsonb,
+  erc jsonb,
+  drc jsonb,
+  g4 jsonb,
+  g5 jsonb,
+  error text,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+create index if not exists idx_validation_jobs_project on validation_jobs(project_id, created_at desc);
+create index if not exists idx_validation_jobs_status on validation_jobs(status, created_at);
+create table if not exists artifacts (
+  id text primary key,
+  job_id text references validation_jobs(id) on delete set null,
+  project_id text not null references projects(id) on delete cascade,
+  kind text not null,
+  filename text not null,
+  bytes integer not null default 0,
+  sha256 text not null default '',
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_artifacts_job on artifacts(job_id);
+create index if not exists idx_artifacts_project on artifacts(project_id, created_at desc);
 `;
 
 /** Crée les tables au premier usage (idempotent, une seule fois par process). */

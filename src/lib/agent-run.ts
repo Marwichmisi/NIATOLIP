@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   createVersion,
+  getVersionFiles,
   getWorkingFiles,
   putWorkingFiles,
 } from "./projects";
@@ -27,6 +28,11 @@ import {
   type CircuitSummary,
   type GateReport,
 } from "./agent-gates";
+import {
+  createValidationJob,
+  getValidationJob,
+  summarizeJobForAgent,
+} from "./validation";
 import {
   getComponentDetails,
   searchComponents,
@@ -568,7 +574,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     exportPack: tool({
       description:
-        "EXPORT — après requestFinalApproval approuvée uniquement. Crée un snapshot versionné et prépare l'archive du projet (M1 : sources + BOM ; Gerber/DRC au M2 via worker KiCad). L'utilisateur approuve explicitement le téléchargement.",
+        "EXPORT NON VALIDÉ (M1) — archive des sources + BOM de travail, SANS Gerber ni DRC KiCad. Après requestFinalApproval approuvée uniquement. Le pack fabrication VALIDÉ (G4/G5) passe par exportManufacturingPack. L'utilisateur approuve explicitement le téléchargement.",
       inputSchema: z.object({
         note: z.string().max(200).optional().describe("Note d'export."),
       }),
@@ -578,7 +584,85 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
           ok: true,
           snapshot: `v${v.version_no}`,
           download: `/api/projects/${ctx.projectId}/export`,
-          note: "M1 : archive des sources + BOM (Gerber/DRC au M2, worker KiCad).",
+          note: "M1 : archive des sources (NON VALIDÉE — Gerber/DRC au M2, worker KiCad).",
+        };
+      },
+    }),
+
+    requestManufacturingValidation: tool({
+      description:
+        "FABRICATION G4/G5 — fige la copie de travail en version puis lance un job worker KiCad (export KiCad + kicad-cli ERC/DRC + Gerber/BOM/PnP). N'appeler qu'à gates G0–G3 vertes. Le job est ASYNCHRONE : relever le jobId puis interroger getValidationResult.",
+      inputSchema: z.object({
+        label: z.string().max(120).optional().describe("Libellé de la version figée."),
+        g0g3: z
+          .array(z.object({ gate: z.string().max(4), status: z.string().max(12) }))
+          .max(8)
+          .optional()
+          .describe("État G0–G3 constaté (tracabilité du job)."),
+      }),
+      execute: async ({ label, g0g3 }) => {
+        const v = await createVersion(ctx.projectId, label ?? "validation KiCad (agent)");
+        const { files } = await getVersionFiles(ctx.projectId, v.id);
+        const job = await createValidationJob(ctx.projectId, files, {
+          versionId: v.id,
+          versionNo: v.version_no,
+          label: label ?? "validation KiCad (agent)",
+          g0g3: g0g3 ?? null,
+        });
+        return {
+          ok: true,
+          jobId: job.id,
+          snapshot: `v${v.version_no}`,
+          status: job.status,
+          next: "Job queued — interrogez getValidationResult(jobId) jusqu'à done (worker Docker requis : `docker compose up --build`).",
+        };
+      },
+    }),
+
+    getValidationResult: tool({
+      description:
+        "Résultat du job worker (G4 ERC/DRC, G5 fabricabilité) : rapport structuré borné (20 findings max). Si queued/running, attendre puis relancer — ne jamais inventer un verdict. Si G4 rouge, corriger le code et relancer requestManufacturingValidation.",
+      inputSchema: z.object({
+        jobId: z.string().min(1).max(64).describe("Job rendu par requestManufacturingValidation."),
+      }),
+      execute: async ({ jobId }) => {
+        const job = await getValidationJob(jobId);
+        if (job.projectId !== ctx.projectId) {
+          throw new Error("Ce job appartient à un autre projet.");
+        }
+        return summarizeJobForAgent(job);
+      },
+    }),
+
+    exportManufacturingPack: tool({
+      description:
+        "EXPORT VALIDÉ (M2) — pack fabrication (gerber.zip, bom.csv, pnp.csv, project-kicad.zip, sources.zip, validation-report.md). EXIGE : job done avec G4+G5 verts + requestFinalApproval (H2) approuvée. L'utilisateur approuve explicitement le téléchargement.",
+      inputSchema: z.object({
+        jobId: z.string().min(1).max(64).describe("Job G4+G5 vert."),
+        note: z.string().max(200).optional().describe("Note d'export."),
+      }),
+      execute: async ({ jobId }) => {
+        const job = await getValidationJob(jobId);
+        if (job.projectId !== ctx.projectId) {
+          throw new Error("Ce job appartient à un autre projet.");
+        }
+        if (job.status !== "done" || job.g4?.status !== "pass" || job.g5?.status !== "pass") {
+          const detail =
+            job.status !== "done"
+              ? `job ${job.status} — attendez le worker (getValidationResult)`
+              : `G4:${job.g4?.status ?? "?"} G5:${job.g5?.status ?? "?"} — corrigez puis relancez`;
+          throw new Error(`Pack validé refusé : ${detail}.`);
+        }
+        const v = await createVersion(ctx.projectId, `Export fab validé (job ${jobId.slice(0, 8)})`);
+        return {
+          ok: true,
+          jobId: job.id,
+          snapshot: `v${v.version_no}`,
+          versionNo: job.versionNo,
+          kicadVersion: job.kicadVersion,
+          downloads: (job.artifacts ?? []).map((a) => ({ kind: a.kind, filename: a.filename, bytes: a.bytes, url: a.url })),
+          report: (job.artifacts ?? []).find((a) => a.kind === "report")?.url ?? null,
+          note: "Pack validé G4/G5 + H2 — versions d'outils citées dans validation-report.md.",
         };
       },
     }),

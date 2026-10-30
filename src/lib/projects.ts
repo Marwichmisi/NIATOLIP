@@ -590,6 +590,28 @@ export async function listVersions(id: string): Promise<VersionSummary[]> {
     }));
 }
 
+/** Fichiers figés d'une version (snapshot immuable, M2 : entrée du worker). */
+export async function getVersionFiles(id: string, versionId: string): Promise<{ versionNo: number; files: Record<string, string> }> {
+  if (storageBackend() === "postgres") {
+    await initSchema();
+    await pgGet(id);
+    const { rows } = await getPool().query(
+      "select path, content from project_files where version_id=$1 and exists(select 1 from project_versions where id=$1 and project_id=$2)",
+      [versionId, id]
+    );
+    if (rows.length === 0) err("not_found", "Version introuvable.", 404);
+    const files: Record<string, string> = {};
+    for (const r of rows) files[r.path as string] = r.content as string;
+    const vno = await getPool().query("select version_no from project_versions where id=$1", [versionId]);
+    const versionNo = (vno.rows[0] as unknown as { version_no: number } | undefined)?.version_no ?? 0;
+    return { versionNo, files };
+  }
+  const doc = await readDoc(id);
+  const src = doc.versions.find((v) => v.id === versionId);
+  if (!src) err("not_found", "Version introuvable.", 404);
+  return { versionNo: src.version_no, files: { ...src.files } };
+}
+
 export async function createVersion(id: string, label?: string): Promise<VersionSummary> {
   const cleanLabel =
     typeof label === "string" && label.trim().length > 0 ? label.trim() : `v${Date.now()}`;

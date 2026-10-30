@@ -1,15 +1,16 @@
-// GET /api/validation-jobs/:id — statut job worker (jalon M2, issue #7).
-// Stub honnête : 501 tant que le worker n'existe pas.
+// GET /api/validation-jobs/:id — statut + rapports bornés du job worker.
+// Docker-only strict : `queued`/`running` tant que le worker ne l'a pas traité.
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return Response.json(
-    {
-      error: {
-        code: "worker_m2",
-        message: "Jobs de validation indisponibles : worker Docker au jalon M2 (issue #7).",
-      },
-    },
-    { status: 501 }
-  );
+import { toApiError } from "@/lib/projects";
+import { getValidationJob, summarizeJobForAgent } from "@/lib/validation";
+
+export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const job = await getValidationJob(id);
+    return Response.json({ job: summarizeJobForAgent(job) });
+  } catch (e) {
+    return toApiError(e);
+  }
 }

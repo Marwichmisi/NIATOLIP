@@ -1,6 +1,7 @@
-# NIATOLIP — composition M1 (issue #3) : `web` + `db`.
+# NIATOLIP — composition M2 (issue #7) : `web` + `db` + `worker` KiCad.
 # Lancement sur poste vierge : `docker compose up --build` (décision D11).
-# Prérequis unique : Docker. Le worker KiCad s'ajoutera ici en M2 (issue #7).
+# Prérequis unique : Docker. `kicad-cli` ne vit QUE dans le service `worker`
+# (jamais sur le PC de l'utilisateur, jamais dans l'image Next.js).
 name: niatolip
 
 services:
@@ -35,7 +36,48 @@ services:
         required: false
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-niatolip}:${POSTGRES_PASSWORD:-niatolip-dev}@db:5432/${POSTGRES_DB:-niatolip}}
+      ARTIFACTS_DIR: /app/artifacts
       PORT: "3000"
+    volumes:
+      # Volume partagé avec le worker : le web sert les artefacts, jamais exécutés ici.
+      - artifacts:/app/artifacts
+
+  worker:
+    build:
+      context: ./worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-niatolip}:${POSTGRES_PASSWORD:-niatolip-dev}@db:5432/${POSTGRES_DB:-niatolip}}
+      ARTIFACTS_DIR: /artifacts
+      POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
+      JOB_TIMEOUT_MS: ${WORKER_JOB_TIMEOUT_MS:-600000}
+    volumes:
+      - artifacts:/artifacts
+    # Isolation best-effort MVP (doc 01 §3.3, doc 09) : quotas CPU/RAM, pas de
+    # privilèges, timeout 10 min par job dans le code. Le worker a besoin du
+    # réseau (Postgres + revérification stock JLCPCB) : le lockdown egress
+    # complet est reporté au durcissement M3.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    # L'entrypoint (root) rend le volume `artifacts` à `kicad` puis exécute
+    # Node en `kicad` — ces 4 caps ne servent qu'à cette bascule initiale.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   pgdata:
+  artifacts:

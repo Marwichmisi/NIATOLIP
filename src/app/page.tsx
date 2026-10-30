@@ -24,10 +24,13 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   reportOutOfScope: "Périmètre",
   requestPlanApproval: "Gate H1 plan",
   requestFinalApproval: "Gate H2 revue",
-  exportPack: "Export archive",
+  exportPack: "Export archive (non validée)",
+  requestManufacturingValidation: "Validation KiCad G4/G5",
+  getValidationResult: "Rapport ERC/DRC",
+  exportManufacturingPack: "Pack fabrication validé",
 };
 
-const GATE_TOOLS = new Set(["requestPlanApproval", "requestFinalApproval", "exportPack"]);
+const GATE_TOOLS = new Set(["requestPlanApproval", "requestFinalApproval", "exportPack", "exportManufacturingPack"]);
 
 const IDLE_STEPS: AgentStep[] = [
   { id: "attente", label: "En attente du premier run", status: "pending", detail: "Décrivez la carte — l'agent proposera un plan (gate H1)." },
@@ -462,6 +465,22 @@ export default function Home() {
               document.body.appendChild(a);
               a.click();
               a.remove();
+            } catch {
+              // Téléchargement bloqué : le lien « Archive prête » reste cliquable.
+            }
+          }
+          if (name === "exportManufacturingPack" && ok) {
+            try {
+              const out = JSON.parse(raw) as { report?: string | null; downloads?: Array<{ url?: string }> };
+              const url = (out.report ?? out.downloads?.[0]?.url ?? null) as string | null;
+              if (typeof url === "string" && url.startsWith("/api/artifacts/")) {
+                setExportUrl(url);
+                const a = document.createElement("a");
+                a.href = url;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+              }
             } catch {
               // Téléchargement bloqué : le lien « Archive prête » reste cliquable.
             }

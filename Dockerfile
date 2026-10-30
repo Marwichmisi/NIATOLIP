@@ -2,7 +2,15 @@
 # Note npm (voir AGENTS.md) : la dép `github:` (circuit-json-to-altium) exige
 # npm 10 pour l'install (npm 11.12 casse le re-resolve), et l'arbre React
 # demande --legacy-peer-deps (peer exact de @tscircuit/3d-viewer).
+# Note bun (fix build déterministe) : `altiumts@0.0.59` et
+# `circuit-json-to-altium` (git) exécutent `bun run scripts/prepare-git-dependency.ts`
+# en `prepare` — sans binaire `bun` dans le stage, `npm ci` échoue en 127
+# (`sh: 1: bun: not found`), indépendamment du réseau/registre.
+# Source : oven/bun officiel (https://bun.sh/docs/installation, image `oven/bun`).
+FROM oven/bun:1-slim AS bun
 FROM node:22-bookworm-slim AS deps
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+RUN bun --version
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Retries élevés : le registre peut réinitialiser les connexions sur les
