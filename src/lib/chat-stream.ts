@@ -151,6 +151,8 @@ export async function streamChat(opts: {
   clientBoard: Record<string, unknown> | null;
   signal: AbortSignal;
   cb: StreamCallbacks;
+  /** Outils connus d'un segment précédent (reprise après gate : l'input est déjà passé). */
+  knownTools?: Array<{ toolCallId: string; toolName: string; input: unknown }>;
 }): Promise<{
   text: string;
   runId: string | null;
@@ -185,6 +187,13 @@ export async function streamChat(opts: {
   let streamError: string | null = null;
   const toolNames = new Map<string, string>();
   const toolInputs = new Map<string, unknown>();
+  // Pré-remplit avec les outils du segment précédent (reprise H1/H2/export).
+  for (const k of opts.knownTools ?? []) {
+    if (k.toolCallId && k.toolName) {
+      toolNames.set(k.toolCallId, k.toolName);
+      toolInputs.set(k.toolCallId, k.input ?? null);
+    }
+  }
   const parts: ToolPartIn[] = [];
 
   const handleChunk = (chunk: Record<string, unknown>) => {

@@ -328,6 +328,11 @@ export default function Home() {
       projectId: opts.pid,
       clientBoard: boardRef.current,
       signal: opts.ctrl.signal,
+      // Reprise après gate : les inputs des outils déjà exécutés datent du
+      // segment précédent — sans ça, l'étape de reprise s'affiche « outil ».
+      knownTools: opts.baseParts
+        .filter((p) => p.toolCallId)
+        .map((p) => ({ toolCallId: p.toolCallId, toolName: p.toolName, input: p.input ?? null })),
       cb: {
         onText: (full) =>
           setMessages((m) => {
