@@ -25,7 +25,7 @@ export function TopBar({
   currentVersionNo: number | null;
   loading: boolean;
   onSelectProject: (id: string) => void;
-  onCreateProject: (name: string) => void;
+  onCreateProject: (name: string, templateId: string | null) => void;
   onRestoreVersion: (versionId: string) => void;
   onSnapshot: () => void;
 }) {

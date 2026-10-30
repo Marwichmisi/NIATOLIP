@@ -25,39 +25,54 @@ export function ProjectControls({
   currentVersionNo: number | null;
   disabled?: boolean;
   onSelectProject: (id: string) => void;
-  onCreateProject: (name: string) => void;
+  onCreateProject: (name: string, templateId: string | null) => void;
   onRestoreVersion: (versionId: string) => void;
   onSnapshot: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [templateId, setTemplateId] = useState<string>("");
 
   const submitCreate = () => {
     const clean = name.trim();
     if (!clean) return;
     setName("");
     setCreating(false);
-    onCreateProject(clean);
+    onCreateProject(clean, templateId || null);
   };
 
   return (
     <div className="flex min-w-0 items-center gap-2">
       <div className="min-w-0 leading-tight">
         {creating ? (
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitCreate();
-              if (e.key === "Escape") setCreating(false);
-            }}
-            onBlur={() => name.trim() === "" && setCreating(false)}
-            placeholder="Nom du projet…"
-            maxLength={80}
-            aria-label="Nom du nouveau projet"
-            className="h-7 w-44 rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
+          <div className="flex items-center gap-1">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitCreate();
+                if (e.key === "Escape") setCreating(false);
+              }}
+              onBlur={() => name.trim() === "" && setCreating(false)}
+              placeholder="Nom du projet…"
+              maxLength={80}
+              aria-label="Nom du nouveau projet"
+              className="h-7 w-32 rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            <select
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+              title="Template de démarrage (FR-14)"
+              aria-label="Template de démarrage"
+              className="h-7 max-w-36 truncate rounded-md border border-input bg-background px-1 text-xs outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Vide</option>
+              <option value="T1">T1 · ESP32-C3</option>
+              <option value="T2">T2 · RP2040</option>
+              <option value="T3">T3 · I2C breakout</option>
+            </select>
+          </div>
         ) : (
           <select
             value={currentId ?? ""}

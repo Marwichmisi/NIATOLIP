@@ -38,6 +38,7 @@ import {
   searchComponents,
   searchComponentsSchema,
 } from "./jlc";
+import { getTemplate, listTemplateMeta } from "./templates";
 
 if (typeof window !== "undefined") {
   throw new Error("src/lib/agent-run.ts est serveur uniquement.");
@@ -357,6 +358,66 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         lcscId: z.string().min(4).max(12).describe("LCSC avec ou sans préfixe C (ex. C123456)."),
       }),
       execute: async ({ lcscId }) => getComponentDetails(lcscId),
+    }),
+
+    // ----- Templates vérifiés T1–T3 (issue #8, FR-14) -----
+    listTemplates: tool({
+      description:
+        "Catalogue des templates en-validation/vérifiés (T1 ESP32-C3, T2 RP2040, T3 breakout I2C) : contenu, BOM présourcée, limites. À consulter quand la demande correspond à un template au lieu de partir de zéro.",
+      inputSchema: z.object({}),
+      execute: async () => ({
+        templates: listTemplateMeta().map((t) => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          board: t.board,
+          matches: t.matches,
+          bomCount: t.bomCount,
+          limits: t.limits,
+        })),
+        note: "applyTemplate écrit main.tsx + parts.json ; LCSC présourcés (vérifiés le 2026-10-30) — stock/prix à revérifier (searchComponents) avant H2/export.",
+      }),
+    }),
+
+    applyTemplate: tool({
+      description:
+        "Amorce le projet depuis un template (T1/T2/T3) : écrit main.tsx + parts.json. Puis adapter (dimensions, composants) et évaluer G0–G3. Ne jamais repartir de zéro quand un template correspond.",
+      inputSchema: z.object({
+        templateId: z.enum(["T1", "T2", "T3"]).describe("Template à appliquer."),
+      }),
+      execute: async ({ templateId }) =>
+        writeMutex(async () => {
+          const t = getTemplate(templateId);
+          if (!t) throw new Error(`Template inconnu : ${templateId}.`);
+          await ensureSearches();
+          const files = await readAll();
+          await putWorkingFiles(ctx.projectId, {
+            ...files,
+            "main.tsx": t.files["main.tsx"],
+            "parts.json": t.files["parts.json"],
+          });
+          // Traçabilité : LCSC présourcés (vérifiés jlcsearch le 2026-10-30,
+          // `npm run templates:check` G0–G3 verts) — le stock reste à
+          // revérifier dans ce run avant H2 (G5 le recontrôle à l'export).
+          const at = new Date().toISOString();
+          const fresh: Array<{ lcsc: string; category: string }> = [];
+          for (const row of t.bom) {
+            if (!state.searchedLcsc.has(row.lcsc)) {
+              state.searchedLcsc.set(row.lcsc, { category: `template:${t.id}`, at });
+              fresh.push({ lcsc: row.lcsc, category: `template:${t.id}` });
+            }
+          }
+          if (fresh.length > 0) await recordSearches(fresh);
+          return {
+            ok: true,
+            templateId: t.id,
+            title: t.title,
+            status: t.status,
+            files: ["main.tsx", "parts.json"],
+            limits: t.limits,
+            next: "Adapter au besoin, évaluer (evaluateCircuit → G0–G3), revérifier stock/prix (searchComponents) avant H2.",
+          };
+        }),
     }),
 
     // ----- Évaluation et checks -----

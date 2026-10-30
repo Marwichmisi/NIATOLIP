@@ -78,9 +78,9 @@ export default function Main() {
 
 | Template | Contenu | Statut |
 |---|---|---|
-| T1 — ESP32-C3 minimal | ESP32-C3, USB-C, LDO 3,3 V, LED, boutons boot/reset | À valider sur carte réelle |
-| T2 — RP2040 minimal | RP2040, flash, USB-C, LDO | À valider |
-| T3 — Capteur I2C | Connecteur I2C, pull-ups, emplacement capteur | À valider |
+| T1 — ESP32-C3 minimal | ESP32-C3, USB-C, LDO 3,3 V, LED, boutons boot/reset | En validation (code : `src/lib/templates.ts`, G0–G3 verts via `npm run templates:check`, fab à venir — doc 14) |
+| T2 — RP2040 minimal | RP2040, flash, USB-C, LDO | En validation (idem ; quartz + flash hors catalogue jlcsearch, procédure doc 14 §3) |
+| T3 — Capteur I2C | Connecteur I2C, pull-ups, emplacement capteur | En validation (idem ; capteur hors catalogue, procédure doc 14 §3) |
 
 Un template devient « vérifié » uniquement après fabrication et test fonctionnel. Avant cela, il est étiqueté « en validation » dans l'UI.
 

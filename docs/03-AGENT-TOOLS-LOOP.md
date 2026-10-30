@@ -69,7 +69,9 @@ Chemins autorisés : uniquement dans le projet courant, extensions `.tsx`, `.ts`
 |---|---|---|---|---|
 | `searchComponents` | serveur | `query`, filtres optionnels (`basicOnly`, `inStockOnly`, `package`) | jusqu'à 10 candidats : `{ lcscId, mpn, description, package, stock, price, basic/preferred }` | Source : jlcsearch (JLCPCB). **Obligatoire avant tout choix de composant principal** |
 | `getComponentDetails` | serveur | `lcscId` | détails + footprint tscircuit recommandé + attributs clés | Met en cache (doc 07) |
-| `getDatasheetSummary` | serveur | `mpn` ou `lcscId`, `question` | résumé ciblé (pinout, tensions, valeurs recommandées) | Should au MVP ; Must dès qu'un composant actif non trivial est utilisé |
+| `getDatasheetSummary` | serveur | `mpn` ou `lcscId`, `question` | résumé ciblé (pinout, tensions, valeurs recommandées) | Non implémenté (issue #8 : seulement si les échecs de fabrication le justifient) |
+| `listTemplates` | serveur | — | T1/T2/T3 : statut, carte, BOM présourcée, limites | FR-14 : consulter quand la demande correspond à un template |
+| `applyTemplate` | serveur | `templateId` | écrit `main.tsx` + `parts.json`, LCSC tracés `template:Tx` | Ne jamais repartir de zéro quand un template correspond |
 
 ### 3.3 Évaluation et checks (client WebWorker)
 

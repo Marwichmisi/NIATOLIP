@@ -41,6 +41,7 @@
 | [11-BENCHMARK-M0.md](./11-BENCHMARK-M0.md) | Benchmark M0 (issue #2) : protocole, checklist providers, tableau et modèle par défaut | Tous |
 | [12-RAPPORT-AUDIT-GATES.md](./12-RAPPORT-AUDIT-GATES.md) | Audit des gates G0–G3 (cas Graetz réel) : verdicts prouvés, inventaire des checks natifs tscircuit, décision de migration complète vers le natif (issue #10), protocole anti-« gate menteuse » | Dev |
 | [13-CORPUS-R1-R5.md](./13-CORPUS-R1-R5.md) | Corpus de régression R1–R5 (issue #6) : prompts canoniques, fiches de test, harnais `npm run corpus`, historique des exécutions | Tous |
+| [14-TEMPLATES-PREUVE-FABRICATION.md](./14-TEMPLATES-PREUVE-FABRICATION.md) | Templates T1–T3 (issue #8) : BOM présourcées, procédure packs JLCPCB R1–R3, fiches de test, registre des fabrications | Tous |
 
 ## Règle d'usage
 

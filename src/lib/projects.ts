@@ -212,24 +212,24 @@ async function pgList(): Promise<ProjectSummary[]> {
   return rows.map(toSummaryPg);
 }
 
-async function pgCreate(name: string): Promise<ProjectSummary> {
+async function pgCreate(name: string, seed?: Record<string, string>): Promise<ProjectSummary> {
   await initSchema();
   const id = randomUUID();
   const t = now();
-  const seed = { ...TOY_FSMAP_GOOD };
+  const seedFiles = seed ?? { ...TOY_FSMAP_GOOD };
   const client = await getPool().connect();
   const versionId = randomUUID();
   try {
     await client.query("begin");
     await client.query(
       "insert into projects(id, user_id, name, working_files) values($1,$2,$3,$4)",
-      [id, LOCAL_USER_ID, name, JSON.stringify(seed)]
+      [id, LOCAL_USER_ID, name, JSON.stringify(seedFiles)]
     );
     await client.query(
       "insert into project_versions(id, project_id, version_no, label) values($1,$2,1,'création')",
       [versionId, id]
     );
-    for (const [p, c] of Object.entries(seed)) {
+    for (const [p, c] of Object.entries(seedFiles)) {
       await client.query(
         "insert into project_files(version_id, path, content, content_hash) values($1,$2,$3,$4)",
         [versionId, p, c, hashContent(c)]
@@ -476,9 +476,10 @@ async function fileList(): Promise<ProjectSummary[]> {
     .map(docSummary);
 }
 
-async function fileCreate(name: string): Promise<ProjectSummary> {
+async function fileCreate(name: string, seed?: Record<string, string>): Promise<ProjectSummary> {
   const t = now();
   const versionId = randomUUID();
+  const seedFiles = seed ?? { ...TOY_FSMAP_GOOD };
   const doc: FileProjectDoc = {
     id: randomUUID(),
     user_id: LOCAL_USER_ID,
@@ -486,7 +487,7 @@ async function fileCreate(name: string): Promise<ProjectSummary> {
     created_at: t,
     updated_at: t,
     current_version_id: versionId,
-    working_files: { ...TOY_FSMAP_GOOD },
+    working_files: { ...seedFiles },
     versions: [
       {
         id: versionId,
@@ -494,7 +495,7 @@ async function fileCreate(name: string): Promise<ProjectSummary> {
         label: "création",
         created_from_run_id: null,
         created_at: t,
-        files: { ...TOY_FSMAP_GOOD },
+        files: { ...seedFiles },
       },
     ],
     conversation: [],
@@ -536,9 +537,10 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   return storageBackend() === "postgres" ? pgList() : fileList();
 }
 
-export async function createProject(name: string): Promise<ProjectSummary> {
+export async function createProject(name: string, seed?: Record<string, string>): Promise<ProjectSummary> {
   const clean = validateName(name);
-  return storageBackend() === "postgres" ? pgCreate(clean) : fileCreate(clean);
+  if (seed !== undefined) validateFiles(seed);
+  return storageBackend() === "postgres" ? pgCreate(clean, seed) : fileCreate(clean, seed);
 }
 
 export async function getProject(id: string): Promise<ProjectSummary> {

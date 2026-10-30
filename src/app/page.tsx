@@ -232,11 +232,11 @@ export default function Home() {
       });
   }, [messages, projectId, projectLoading]);
 
-  const handleCreateProject = useCallback(async (name: string) => {
+  const handleCreateProject = useCallback(async (name: string, templateId: string | null) => {
     const created = await api<{ project: ProjectSummary }>("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...(templateId ? { templateId } : {}) }),
     });
     setMessages([GREETING]);
     persistedCount.current = 0;
@@ -767,7 +767,7 @@ export default function Home() {
         currentVersionNo={currentVersionNo}
         loading={projectLoading}
         onSelectProject={(id) => void openProject(id)}
-        onCreateProject={(name) => void handleCreateProject(name)}
+        onCreateProject={(name, templateId) => void handleCreateProject(name, templateId)}
         onRestoreVersion={(vid) => void handleRestoreVersion(vid)}
         onSnapshot={() => void handleSnapshot()}
       />

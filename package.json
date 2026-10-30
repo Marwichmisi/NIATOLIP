@@ -13,7 +13,8 @@
     "start": "next start",
     "lint": "next lint",
     "benchmark:models": "tsx scripts/benchmark-models.ts",
-    "corpus": "tsx scripts/corpus.ts"
+    "corpus": "tsx scripts/corpus.ts",
+    "templates:check": "tsx scripts/templates-check.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.104",
