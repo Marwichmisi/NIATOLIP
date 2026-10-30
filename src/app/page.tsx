@@ -50,6 +50,39 @@ function summarizeInput(name: string, input: unknown): string {
   return "";
 }
 
+type StoredPart = NonNullable<ChatMsg["parts"]>[number];
+
+function restoredDetail(p: StoredPart): string {
+  if (typeof p.error === "string" && p.error) return p.error.slice(0, 160);
+  if (p.approval) return p.approval.approved ? "Approuvé par l'utilisateur" : "Refusé par l'utilisateur";
+  const o = p.output as Record<string, unknown> | null;
+  if (o && typeof o === "object") {
+    if (Array.isArray(o.gates)) {
+      return (o.gates as Array<{ gate: string; status: string }>).map((g) => `${g.gate}:${g.status}`).join(" ");
+    }
+    if (Array.isArray(o.candidates)) return `${o.candidates.length} candidat(s)`;
+    if (typeof o.hint === "string") return o.hint.slice(0, 160);
+    if (typeof o.message === "string") return o.message.slice(0, 160);
+  }
+  return summarizeInput(p.toolName, p.input) || "Terminé";
+}
+
+/** Reconstruit le fil d'exécution depuis les parts persistées (réouverture, FR-12). */
+function stepsFromParts(parts: StoredPart[] | undefined): AgentStep[] | null {
+  if (!parts || parts.length === 0) return null;
+  return parts.slice(0, 100).map((p, i) => ({
+    id: `h-${p.toolCallId || i}`,
+    label: TOOL_STEP_LABELS[p.toolName] ?? p.toolName,
+    detail: restoredDetail(p),
+    status: (typeof p.error === "string" && p.error
+      ? "error"
+      : p.approval && !p.approval.approved
+        ? "denied"
+        : "done") as AgentStep["status"],
+    tool: p.toolName,
+  }));
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   const data = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
@@ -121,6 +154,9 @@ export default function Home() {
       setVersions(versionsData.versions);
       const history = messagesData.messages.filter((m) => m.role === "user" || m.role === "agent");
       setMessages(history.length > 0 ? history : [GREETING]);
+      // Fil d'exécution restauré depuis le dernier run persisté (FR-12).
+      const lastWithParts = [...history].reverse().find((m) => m.role === "agent" && (m.parts?.length ?? 0) > 0);
+      setSteps(stepsFromParts(lastWithParts?.parts) ?? IDLE_STEPS);
       persistedCount.current = history.length > 0 ? history.length : 0;
       finalizedRef.current = history.length > 0 ? history.length - 1 : -1;
       setProjectId(id);
@@ -289,6 +325,10 @@ export default function Home() {
         );
         setRunSteps({ steps: st.run.steps, max: st.run.maxSteps });
         setRunCost({ cost: st.run.costUsd, max: st.run.maxCostUsd });
+        lastStepsRef.current = {
+          steps: st.run.steps, max: st.run.maxSteps,
+          cost: st.run.costUsd, maxCost: st.run.maxCostUsd,
+        };
       } catch {
         // Coût indisponible : non bloquant.
       }
@@ -312,6 +352,55 @@ export default function Home() {
     setMessages((m) => [...m, { role: "agent", text }]);
     finalizedRef.current = messagesRef.current.length;
   }, []);
+  /** Dernier relevé étapes/coût (poll) — repli si le fetch final échoue. */
+  const lastStepsRef = useRef<{ steps: number; max: number; cost: number; maxCost: number } | null>(null);
+
+  /**
+   * État de fin d'itération (doc 06 §4) : plafond d'étapes, budget, ou arrêt
+   * du modèle avant la fin — dans les trois cas, le bouton « Continuer
+   * l'itération » doit apparaître (même projet, même modèle, jamais de
+   * relance automatique). Version relue fraîche (snapshot possible pendant
+   * le run), jamais le compteur fermé au départ du run.
+   */
+  const applyEndState = useCallback(async (runId: string | null, pid: string) => {
+    let steps = lastStepsRef.current?.steps ?? 0;
+    let max = lastStepsRef.current?.max ?? 50;
+    let cost = lastStepsRef.current?.cost ?? 0;
+    let maxCost = lastStepsRef.current?.maxCost ?? 2;
+    try {
+      if (runId) {
+        const st = await api<{ run: { steps: number; maxSteps: number; costUsd: number; maxCostUsd: number } }>(
+          `/api/chat/${runId}`
+        );
+        steps = st.run.steps;
+        max = st.run.maxSteps;
+        cost = st.run.costUsd;
+        maxCost = st.run.maxCostUsd;
+        setRunSteps({ steps, max });
+        setRunCost({ cost, max: maxCost });
+      }
+    } catch {
+      // Registre indisponible : on garde le dernier relevé du poll.
+    }
+    let vlabel = "version courante";
+    try {
+      const vs = await api<{ versions: VersionSummary[] }>(`/api/projects/${pid}/versions`);
+      if (vs.versions.length > 0) {
+        vlabel = `v${Math.max(...vs.versions.map((v) => v.version_no))}`;
+      }
+    } catch {
+      // Versions illisibles : libellé générique.
+    }
+    if (steps >= max) {
+      setEndState({ kind: "steps", steps, max, versionLabel: vlabel });
+    } else if (maxCost > 0 && cost >= maxCost) {
+      setEndState({ kind: "budget", steps, max, versionLabel: vlabel });
+    } else if (steps > 0) {
+      // Arrêt du modèle (tâche possiblement inachevée) : même affordance.
+      setEndState({ kind: "ended", steps, max, versionLabel: vlabel });
+    }
+  }, []);
+
   /** Un segment de stream (run initial ou reprise après approbation). */
   const streamSegment = useCallback(async (opts: {
     serverMessages: ChatMsg[];
@@ -414,6 +503,7 @@ export default function Home() {
     setRunning(true);
     setRunCost(null);
     setRunSteps(null);
+    lastStepsRef.current = null;
     setPendingApproval(null);
     pendingRef.current = null;
     resumeRef.current = null;
@@ -452,24 +542,10 @@ export default function Home() {
           finalizedRef.current = assistantIdx;
           if (seg.streamError) {
             await reportSegmentError(seg.runId, seg.streamError);
-          }
-          // Cause de fin : plafond d'étapes, budget, ou fin normale.
-          try {
-            if (seg.runId) {
-              const st = await api<{ run: { steps: number; maxSteps: number; costUsd: number; maxCostUsd: number; choice: string } }>(
-                `/api/chat/${seg.runId}`
-              );
-              setRunSteps({ steps: st.run.steps, max: st.run.maxSteps });
-              setRunCost({ cost: st.run.costUsd, max: st.run.maxCostUsd });
-              const vlabel = currentVersionNo != null ? `v${currentVersionNo}` : "version courante";
-              if (st.run.steps >= st.run.maxSteps) {
-                setEndState({ kind: "steps", steps: st.run.steps, max: st.run.maxSteps, versionLabel: vlabel });
-              } else if (st.run.costUsd >= st.run.maxCostUsd) {
-                setEndState({ kind: "budget", steps: st.run.steps, max: st.run.maxSteps, versionLabel: vlabel });
-              }
-            }
-          } catch {
-            // Statut final indisponible : non bloquant.
+          } else {
+            // Fin d'itération (plafond, budget ou arrêt modèle) : la carte
+            // « Continuer l'itération » doit toujours pouvoir apparaître.
+            await applyEndState(seg.runId, pid);
           }
           break;
         }
@@ -503,7 +579,7 @@ export default function Home() {
         await refreshProjectState();
       }
     }
-  }, [projectId, running, model, refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo, reportSegmentError]);
+  }, [projectId, running, model, refreshProjectState, streamSegment, startPoll, stopPoll, reportSegmentError, applyEndState]);
 
   /** Reprise du tour après APPROBATION explicite (même message agent, même projet, même modèle).
    *  `reason` porte les modifications de l'utilisateur (plan/BOM corrigé) :
@@ -562,23 +638,8 @@ export default function Home() {
           resumeRef.current = null;
           if (seg.streamError) {
             await reportSegmentError(seg.runId, seg.streamError);
-          }
-          try {
-            if (seg.runId) {
-              const st = await api<{ run: { steps: number; maxSteps: number; costUsd: number; maxCostUsd: number } }>(
-                `/api/chat/${seg.runId}`
-              );
-              setRunSteps({ steps: st.run.steps, max: st.run.maxSteps });
-              setRunCost({ cost: st.run.costUsd, max: st.run.maxCostUsd });
-              const vlabel = currentVersionNo != null ? `v${currentVersionNo}` : "version courante";
-              if (st.run.steps >= st.run.maxSteps) {
-                setEndState({ kind: "steps", steps: st.run.steps, max: st.run.maxSteps, versionLabel: vlabel });
-              } else if (st.run.costUsd >= st.run.maxCostUsd) {
-                setEndState({ kind: "budget", steps: st.run.steps, max: st.run.maxSteps, versionLabel: vlabel });
-              }
-            }
-          } catch {
-            // Statut final indisponible : non bloquant.
+          } else {
+            await applyEndState(seg.runId, resume.pid);
           }
           break;
         }
@@ -603,7 +664,7 @@ export default function Home() {
         await refreshProjectState();
       }
     }
-  }, [refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo, reportSegmentError]);
+  }, [refreshProjectState, streamSegment, startPoll, stopPoll, reportSegmentError, applyEndState]);
 
   const handleApprove = useCallback(() => {
     void continueTurn();
@@ -623,6 +684,7 @@ export default function Home() {
     pendingRef.current = null;
     resumeRef.current = null;
     setPendingApproval(null);
+    setEndState(null);
     setFocusKey((k) => k + 1);
     if (pending && resume) {
       const rid = pending.toolCallId;
@@ -651,6 +713,7 @@ export default function Home() {
   };
 
   const handleStop = () => {
+    setEndState(null);
     if (pendingRef.current) {
       // Annule l'attente d'approbation : le run serveur est déjà terminé.
       const id = pendingRef.current.toolCallId;

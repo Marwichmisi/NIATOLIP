@@ -117,7 +117,13 @@ function toUIMessages(msgs: ChatMsgIn[]): UIMessageOut[] {
 function toolDetail(name: string, output: unknown): string {
   if (output && typeof output === "object") {
     const o = output as Record<string, unknown>;
-    if (typeof o.hint === "string") return String(o.hint).slice(0, 160);
+    if (typeof o.hint === "string" && !(Array.isArray(o.errors) && o.errors.length > 0)) return String(o.hint).slice(0, 160);
+    // Échec technique (exception d'évaluation) ≠ échec de check (gate rouge) :
+    // le distinguer explicitement dans le fil (doc 06 §4).
+    if (Array.isArray(o.errors) && o.errors.length > 0) {
+      const first = o.errors[0] as { message?: unknown };
+      return `Échec technique : ${String(first?.message ?? "exception").slice(0, 130)}`;
+    }
     if (o.gates && Array.isArray(o.gates)) {
       return (o.gates as Array<{ gate: string; status: string }>)
         .map((g) => `${g.gate}:${g.status}`)

@@ -34,7 +34,8 @@ export interface ChatMsg {
 }
 
 export interface EndState {
-  kind: "steps" | "budget";
+  /** steps = plafond 50 atteint ; ended = run terminé avant (arrêt modèle) ; budget = plafond coût. */
+  kind: "steps" | "budget" | "ended";
   steps: number;
   max: number;
   versionLabel: string;
@@ -119,7 +120,7 @@ export function AgentPanel({
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <h2 className="font-display text-sm font-semibold tracking-tight">Agent</h2>
         <Badge variant={running ? "default" : endState ? "secondary" : doneCount > 0 ? "success" : "secondary"}>
-          {running ? "En cours" : endState?.kind === "steps" ? "Itération terminée" : doneCount > 0 ? "Terminé" : "En pause"}
+          {running ? "En cours" : endState?.kind === "steps" || endState?.kind === "ended" ? "Itération terminée" : doneCount > 0 ? "Terminé" : "En pause"}
         </Badge>
       </div>
 
@@ -201,10 +202,15 @@ export function AgentPanel({
             </div>
           )}
 
-          {endState?.kind === "steps" && !pendingApproval && (
+          {(endState?.kind === "steps" || endState?.kind === "ended") && !pendingApproval && (
             <div className="rounded-lg border border-border bg-card p-3">
               <p className="flex items-center gap-1.5 text-[13px] font-medium"><CircleAlert className="h-4 w-4 text-primary" /> Itération terminée ({endState.steps} étapes)</p>
-              <p className="mt-1 text-xs text-muted-foreground">Le projet est sauvegardé ({endState.versionLabel}). L'itération suivante repart du même projet et du même modèle — jamais relancée automatiquement.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {endState.kind === "steps"
+                  ? `Plafond de ${endState.max} étapes atteint. Le projet est sauvegardé (${endState.versionLabel}).`
+                  : `Le run s'est arrêté — tâche possiblement inachevée. Le projet est sauvegardé (${endState.versionLabel}).`}
+                {" "}L'itération suivante repart du même projet et du même modèle — jamais relancée automatiquement.
+              </p>
               <Button size="sm" className="mt-2.5" onClick={onContinue}><Play /> Continuer l'itération</Button>
             </div>
           )}
