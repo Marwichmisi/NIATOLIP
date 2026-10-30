@@ -1,94 +1,53 @@
-# Conventions tscircuit imposées à l'agent
+# Conventions tscircuit — overlay NIATOLIP
 
-| Version | 1.0 — 2026-10-29 |
+| Version | 2.0 — 2026-10-30 (réécriture : l'ancien doc 04 v1.0 dupliquait la syntaxe tscircuit et contenait un exemple d'API obsolète jamais testé) |
 |---|---|
-| Usage | Ce document est **injecté dans le contexte de l'agent** (en complément du skill officiel tscircuit) et sert de référence aux reviewers humains. Toute règle ici doit être vérifiable par un check ou par revue. |
-
-> Installer aussi le skill officiel : `npx skills add tscircuit/skill` — il couvre syntaxe, workflow CLI et checklist pré-fabrication. Le présent document ne le remplace pas ; il ajoute les contraintes propres à NIATOLIP.
+| Rôle | **Uniquement ce qui est propre à NIATOLIP.** Syntaxe, éléments, workflow et checklist tscircuit viennent du skill officiel épinglé dans le dépôt : `src/lib/skills/tscircuit/` (`SKILL.md`, `SYNTAX.md`, `elements/`, `templates/`, `CHECKLIST.md` ; provenance et adaptations dans `NIATOLIP.md` du même dossier). |
+| Statut d'usage | Aujourd'hui : référence humaine et des reviewers. Le chargement automatique par l'agent (skill à la demande, décision D16) arrive en phase P2 du plan `15-PLAN-REFONTE-V2.md`. En cas de conflit entre cet overlay et le skill officiel, **cet overlay prime**. |
 
 ---
 
-## 1. Structure de projet
+## 1. Sourcing (produit, inviolable)
 
-- Point d'entrée unique : `main.tsx` à la racine du projet.
-- Un fichier par sous-circuit significatif si le design dépasse ~15 composants (`power.tsx`, `sensors.tsx`…), importés depuis `main.tsx`.
-- Aucun code en dehors des fichiers du projet ; aucun accès réseau dans le code circuit.
-- Chaque projet démarre soit de zéro (carte très simple), soit d'un **template vérifié** (FR-14) — jamais d'un copier-coller non sourcé trouvé dans la conversation.
+1. Aucune référence inventée : LCSC, MPN, pinout ou footprint d'un composant principal vient d'un outil (`searchComponents`, détails pièce) ou d'une source fournie par l'utilisateur (datasheet) — jamais de mémoire du modèle.
+2. Chaque ligne de `parts.json` porte un statut D17 : `verified`, `out_of_stock`, `generic`, `custom`, `missing` (définitions et effets : doc 15 §4.2). Le lien code ↔ référence se fait aussi dans le TSX quand c'est possible (`supplierPartNumbers={{ jlcpcb: ["C…"] }}` sur le `<chip>`, idiome officiel).
+3. Préférer JLCPCB Basic/Preferred en stock ; toute pièce Extended est signalée dans la revue finale.
+4. Le footprint vient de la référence choisie (footprinter associé) ; un footprint standard générique (0603, SOT-23…) n'est admis qu'avec le statut `generic` explicite. Orientation/pin 1 des pièces polarisées : à vérifier sur la preview avant H2.
+5. Hors stock ou hors catalogue : appliquer l'échelle de repli (doc 15 §4.3 — équivalent, générique, custom datasheet, question à l'utilisateur). Ne jamais bloquer la conception pour un problème d'approvisionnement ; le stock ne contraint que l'assemblage PCBA (mode d'assemblage du projet, doc 15 §4.1).
 
-## 2. Règles de génération (normatif)
+## 2. Correspondance checks officiels ↔ gates NIATOLIP
 
-### Composants et sourcing
+Les gates sont des verdicts produit construits **sur** les diagnostics natifs, pas des heuristiques locales (décision D20, audit doc 12) :
 
-1. Tout composant principal (MCU, régulateur, connecteur, capteur) doit provenir d'un appel `searchComponents` dans le run courant. **Interdiction d'inventer une référence LCSC ou un MPN.**
-2. Préférer les pièces **JLCPCB Basic/Preferred en stock**. Toute pièce « Extended » doit être signalée à l'utilisateur dans la revue finale.
-3. Le footprint doit venir du composant/footprinter associé à la référence choisie — jamais un footprint « approché » tapé de mémoire pour un composant principal.
-4. Vérifier l'orientation/pin 1 sur les snapshots pour les connecteurs et circuits polarisés avant H2.
-
-### Schéma et connexions
-
-5. Chaque alimentation est explicitement nommée et connectée (`VCC`, `GND`, `3V3`…) ; aucun net d'alimentation implicite.
-6. Découplage : un condensateur de découplage au plus près de chaque broche d'alimentation de circuit actif, sauf justification écrite par l'agent dans le résumé.
-7. Les interfaces externes (USB-C, I2C, UART, boutons, LED) sont regroupées et nommées clairement ; les connecteurs sont placés en bord de carte.
-8. Les pull-ups/pull-downs requis par les datasheets (I2C, boot, reset) sont explicites dans le code, pas supposés.
-
-### Placement (avant tout routage)
-
-9. **Placement d'abord, routage ensuite.** `checkPlacement` doit être vert avant d'activer/valider le routage.
-10. Le MCU est placé de façon centrale ; les composants de découplage au plus près de ses broches d'alimentation ; le connecteur d'alimentation en bord de carte.
-11. Aucun composant hors des limites du `<board>` ; marges minimales de 1 mm au bord sauf connecteur prévu pour dépasser.
-12. Taille de carte par défaut : la plus petite raisonnable pour le périmètre ; toute carte > 100 × 100 mm doit être justifiée (coût fabrication).
-
-### Routage et carte
-
-13. Défaut MVP : **2 couches**, pistes signal 0,2 mm min., pistes d'alimentation dimensionnées selon le courant annoncé par l'agent (et explicitées dans le résumé).
-14. Plan de masse : la couche inférieure est privilégiée pour GND ; les coupures de plan sous les lignes sensibles sont à éviter et à signaler.
-15. Distances/isolements par défaut tscircuit conservés ; ne jamais relâcher une contrainte de clearance pour « faire passer » le routage.
-16. Sérigraphie minimale : nom de la carte, repères des connecteurs d'interface, marqueur pin 1 sur les connecteurs polarisés.
-
-### Ce que l'agent ne doit jamais faire
-
-- ❌ Inventer un LCSC ID, un MPN, un pinout ou un footprint.
-- ❌ Déclarer le routage « terminé » sans `checkRouting` vert et nets non connectés = 0.
-- ❌ Réduire les clearances ou supprimer un découplage pour résoudre une erreur de placement.
-- ❌ Générer du code hors périmètre (D8) « pour essayer » — utiliser `reportOutOfScope`.
-- ❌ Cacher une erreur d'évaluation dans le résumé utilisateur.
-
-## 3. Exemple de référence (forme attendue)
-
-```tsx
-import { Board, Chip, Resistor, Capacitor, Trace } from 'tscircuit';
-// Forme indicative : la syntaxe exacte suit la version épinglée de tscircuit
-// et le skill officiel. La structure — pas la syntaxe de mémoire — fait foi.
-
-export default function Main() {
-  return (
-    <board width="40mm" height="30mm">
-      {/* Alimentation USB-C + LDO 3.3V : bloc vérifié du template */}
-      {/* MCU ESP32-C3 : référence issue de searchComponents */}
-      {/* Capteur I2C avec pull-ups explicites */}
-      {/* LED d'état avec résistance série */}
-    </board>
-  );
-}
-```
-
-> Règle de maintenance : cet exemple doit être remplacé par le code réel du template R1 dès qu'il est validé sur carte fabriquée (M2). Un exemple non testé ne doit pas rester dans ce document.
-
-## 4. Templates vérifiés (à construire au M2)
-
-| Template | Contenu | Statut |
+| Gate | Base officielle (skill / `@tscircuit/checks`) | Verdict NIATOLIP |
 |---|---|---|
-| T1 — ESP32-C3 minimal | ESP32-C3, USB-C, LDO 3,3 V, LED, boutons boot/reset | En validation (code : `src/lib/templates.ts`, G0–G3 verts via `npm run templates:check`, fab à venir — doc 14) |
-| T2 — RP2040 minimal | RP2040, flash, USB-C, LDO | En validation (idem ; quartz + flash hors catalogue jlcsearch, procédure doc 14 §3) |
-| T3 — Capteur I2C | Connecteur I2C, pull-ups, emplacement capteur | En validation (idem ; capteur hors catalogue, procédure doc 14 §3) |
+| G0 | Rendu d'évaluation, erreurs `*_error` du Circuit JSON | Aucune erreur d'évaluation |
+| G1 | `runAllNetlistChecks` (≈ `tsci check netlist`) + `pin_specification` | Netlist et exigences de broches propres |
+| G2 | `runAllPlacementChecks` (≈ `tsci check placement`, `schematic-placement` côté schéma) | Placement propre, rien hors carte |
+| G3 | `runAllRoutingChecks` (≈ `tsci check routing`, `shorts`, `pcb-style` selon disponibilité) | Routage complet, 0 net non routé |
+| G4 | `kicad-cli` ERC/DRC sur l'export KiCad (worker Docker) | Inchangé — juge externe, voir doc 05 |
+| G5 | Scindée **G5-PCB / G5-PCBA** (doc 15 §4.4) : PnP officiel, couverture BOM, DRC fabricant JLCPCB | Selon le mode d'assemblage du projet |
 
-Un template devient « vérifié » uniquement après fabrication et test fonctionnel. Avant cela, il est étiqueté « en validation » dans l'UI.
+Pendant le développement, suivre la philosophie du skill officiel : rendre d'abord le circuit correct, traiter les diagnostics dans l'ordre netlist → placement → routage. La séquence bloquante « export validé » est imposée par le serveur (P0), pas par l'ordre d'appel des outils.
 
-## 5. Checklist pré-H2 pour l'agent (auto-revue)
+## 3. Périmètre et contraintes produit
 
-- [ ] Tous les composants principaux ont une référence LCSC vérifiée et en stock.
-- [ ] `evaluateCircuit`, `checkNetlist`, `checkPlacement`, `checkRouting` verts.
-- [ ] Snapshot PCB relu : orientation connecteurs, pin 1, sérigraphie, rien hors carte.
+1. **Périmètre D7/D8 inchangé** : cartes 2 couches (4 max), basse vitesse ; hors périmètre (BGA dense, DDR, RF, USB3/PCIe, secteur, médical/auto) → refus propre via l'outil dédié, jamais de génération « pour essayer ».
+2. Défauts de carte : 2 couches, piste signal 0,2 mm min., pistes d'alimentation dimensionnées selon le courant annoncé (et explicitées au résumé). Ne jamais relâcher une clearance pour faire passer le routage.
+3. Électrique minimal attendu : alimentations nommées (`net.GND`, `net.VCC`…), découplage au plus près de chaque broche d'alimentation, pull-ups/pull-downs datasheet explicites (I2C, boot, reset), plan de masse privilégié en couche inférieure.
+4. Placement d'abord, routage ensuite ; MCU central, découplages proches, connecteurs en bord de carte ; marge 1 mm au bord sauf connecteur prévu pour dépasser ; toute carte > 100 × 100 mm justifiée (coût).
+5. Sérigraphie minimale : nom de la carte, repères d'interface, marqueur pin 1 sur les connecteurs polarisés. Pièces soudées à la main : `doNotPlace` (idiome officiel).
+6. Organisation du code : voir la convention multi-fichiers (doc 15 §5, skill `structuration` à venir) ; organisation du schéma selon le skill officiel (`<schematicsheet>`/`<schematicsection>` dès que la carte grandit).
+
+## 4. Templates
+
+Les templates officiels (`src/lib/skills/tscircuit/templates/`) servent de gabarits de forme. Les templates produit T1–T3 (`src/lib/templates.ts`, BOM présourcées) restent **« en validation »** tant qu'ils n'ont pas été fabriqués et testés (registre doc 14) ; aucun template — officiel ou maison — ne devient « vérifié » sur un seul DRC vert.
+
+## 5. Checklist pré-H2 (auto-revue de l'agent)
+
+- [ ] Chaque composant principal a un statut de sourcing D17 explicite ; aucun `missing` ; les `custom` ont leur pinout confirmé.
+- [ ] G0–G3 verts sur diagnostics natifs ; G4/G5 selon le mode d'assemblage du projet.
+- [ ] Preview relue : orientation connecteurs, pin 1, sérigraphie, rien hors carte.
 - [ ] Découplages présents ; pull-ups/boot/reset conformes datasheet.
-- [ ] BOM relue : aucune pièce Extended non signalée, quantités correctes.
-- [ ] Limites résiduelles écrites dans le résumé (ce que les checks ne prouvent pas : qualité électrique analogique, thermique, etc.).
+- [ ] BOM relue : pièces Extended et statuts non-`verified` signalés, quantités correctes.
+- [ ] Limites résiduelles écrites dans le résumé (ce que les checks ne prouvent pas : électrique analogique, thermique, pinout non confirmé par datasheet).
