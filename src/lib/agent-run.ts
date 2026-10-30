@@ -21,13 +21,13 @@ import {
 } from "./projects";
 import { staticEvaluateCircuit } from "./toy-agent";
 import {
-  checkG0,
   evaluateFullServer,
   runAllGates,
   type CircuitElement,
   type CircuitSummary,
   type GateReport,
 } from "./agent-gates";
+import { TSCIRCUIT_VERSIONS } from "./toy-circuit";
 import {
   createValidationJob,
   getValidationJob,
@@ -139,9 +139,22 @@ function evalCacheDir(): string {
   return join(process.env.PROJECTS_DIR ?? join(process.cwd(), "projects"), ".cache", "eval");
 }
 
+// Quarantaine/divergences (doc 12 §6) : globale par déploiement, pas par
+// projet — le comportement d'une règle native dépend de la version des
+// checks, pas du projet qui la déclenche. Best-effort et volatil comme le
+// cache d'éval (survit tant que le volume PROJECTS_DIR survit) : après un
+// redéploiement l'historique repart de zéro, sans effacer les règles déjà
+// corrigées dans le code. Voir doc 05.
+function evalGatesDir(): string {
+  return join(process.env.PROJECTS_DIR ?? join(process.cwd(), "projects"), ".cache", "gates");
+}
+
 function hashFiles(files: Record<string, string>, entrypoint: string): string {
   const h = createHash("sha256");
+  // P0-4 : la clé inclut les versions tscircuit/checks — un changement de
+  // version invalide les verdicts (doc 12 §5, 0.0.x cassants).
   h.update(`entry:${entrypoint}\n`);
+  h.update(`tscircuit:${TSCIRCUIT_VERSIONS.tscircuit}|core:${TSCIRCUIT_VERSIONS.core}|eval:${TSCIRCUIT_VERSIONS.eval}|checks:${TSCIRCUIT_VERSIONS.checks}\n`);
   for (const k of Object.keys(files).sort()) {
     if (k.startsWith(".")) continue; // fichiers réservés hors contenu circuit
     h.update(`--- ${k} ---\n`);
@@ -443,11 +456,16 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
           const suffix = state.noteFailure(`G0-full:exception`);
           return { level: "full", ok: false, errors: [{ kind: "exception", code: "exception", message }], hint: suffix };
         }
-        const { reports, allPass } = runAllGates(full.summary, full.json);
         const hash = hashFiles(files, entry);
+        const { reports, allPass, quarantinedRules } = await runAllGates(full.summary, full.json, {
+          hash,
+          divergenceDir: evalGatesDir(),
+        });
         let snapshot: string | null = null;
         if (allPass && !state.snapshottedHashes.has(hash)) {
-          const v = await createVersion(ctx.projectId, "G0–G3 verts (agent)");
+          const quarantineNote =
+            quarantinedRules.length > 0 ? ` — quarantaine: ${quarantinedRules.join(", ")}` : "";
+          const v = await createVersion(ctx.projectId, `G0–G3 verts (agent)${quarantineNote}`);
           state.snapshottedHashes.add(hash);
           state.snapshots.push(`v${v.version_no}`);
           snapshot = `v${v.version_no}`;
@@ -459,61 +477,63 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
           return {
             level: "full",
             ok: false,
-            gates: reports.map((r) => ({
-              gate: r.gate,
-              status: r.status,
-              findings: r.findings,
-              stats: r.stats,
-            })),
-            hint: "Corriger la première gate rouge (ordre G0→G3)." + suffix,
+            gates: reports.map(reportOf),
+            quarantined: quarantinedRules,
+            hint: "Corriger la première gate rouge (ordre G0→G3). Les gates « non jugée » sont bloquées par une gate antérieure rouge : ne pas les « corriger »." + suffix,
           };
         }
         return {
           level: "full",
           ok: true,
-          gates: reports.map((r) => ({ gate: r.gate, status: r.status, findings: r.findings, stats: r.stats })),
+          gates: reports.map(reportOf),
+          quarantined: quarantinedRules,
           snapshot,
         };
       },
     }),
 
     checkNetlist: tool({
-      description: "Gate G1 : connexions from/to résolues, pins sans trace listés.",
+      description: "Gate G1 : netlist native (runAllNetlistChecks + runAllPinSpecificationChecks). Bloquée si G0 rouge.",
       inputSchema: z.object({}),
       execute: async () => {
         const files = await readAll();
-        const { summary, json } = await ensureFull(files, resolveEntrypoint(files));
-        const g0 = checkG0(summary);
-        if (g0.status === "fail") return { ...reportOf(g0), blocked: "G0 rouge — évaluer d'abord." };
-        return reportOf(runAllGates(summary, json).reports[1]);
+        const entry = resolveEntrypoint(files);
+        const { summary, json } = await ensureFull(files, entry);
+        const { reports } = await runAllGates(summary, json, {
+          hash: hashFiles(files, entry),
+          divergenceDir: evalGatesDir(),
+        });
+        return reportOf(reports[1]);
       },
     }),
 
     checkPlacement: tool({
-      description: "Gate G2 : chevauchements, hors-carte, marges. À passer AVANT tout routage.",
+      description: "Gate G2 : placement natif (runAllPlacementChecks). Bloquée si G0/G1 rouges. À passer AVANT tout routage.",
       inputSchema: z.object({}),
       execute: async () => {
         const files = await readAll();
-        const { summary, json } = await ensureFull(files, resolveEntrypoint(files));
-        const all = runAllGates(summary, json);
-        if (all.reports[1].status === "fail") {
-          return { ...reportOf(all.reports[2]), blocked: "G1 rouge — netlist d'abord (doc 05 : gates séquentielles)." };
-        }
-        return reportOf(all.reports[2]);
+        const entry = resolveEntrypoint(files);
+        const { summary, json } = await ensureFull(files, entry);
+        const { reports } = await runAllGates(summary, json, {
+          hash: hashFiles(files, entry),
+          divergenceDir: evalGatesDir(),
+        });
+        return reportOf(reports[2]);
       },
     }),
 
     checkRouting: tool({
-      description: "Gate G3 : 0 net non routé, 0 violation. Interdit si G2 rouge.",
+      description: "Gate G3 : routage natif (runAllRoutingChecks). Bloquée si G0/G1/G2 rouges.",
       inputSchema: z.object({}),
       execute: async () => {
         const files = await readAll();
-        const { summary, json } = await ensureFull(files, resolveEntrypoint(files));
-        const all = runAllGates(summary, json);
-        if (all.reports[2].status === "fail") {
-          return { ...reportOf(all.reports[3]), blocked: "G2 rouge — placement d'abord (doc 05 : gates séquentielles)." };
-        }
-        return reportOf(all.reports[3]);
+        const entry = resolveEntrypoint(files);
+        const { summary, json } = await ensureFull(files, entry);
+        const { reports } = await runAllGates(summary, json, {
+          hash: hashFiles(files, entry),
+          divergenceDir: evalGatesDir(),
+        });
+        return reportOf(reports[3]);
       },
     }),
 
@@ -764,5 +784,12 @@ function normalizeLcsc(l: string): string {
 }
 
 function reportOf(r: GateReport): GateReport {
-  return { gate: r.gate, status: r.status, findings: r.findings.slice(0, 20), stats: r.stats };
+  return {
+    gate: r.gate,
+    status: r.status,
+    findings: r.findings.slice(0, 20),
+    stats: r.stats,
+    ...(typeof r.judged === "boolean" ? { judged: r.judged } : {}),
+    ...(typeof r.blocked === "string" ? { blocked: r.blocked } : {}),
+  };
 }

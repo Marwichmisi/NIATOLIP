@@ -81,6 +81,8 @@ export const TOY_FSMAP_BROKEN: Record<string, string> = {
 // Synchronisées avec package.json — mettre à jour aux deux endroits.
 export const TSCIRCUIT_VERSIONS = {
   tscircuit: "0.0.3036",
+  core: "0.0.2230",
   eval: "0.0.1668",
+  checks: "0.0.265",
   runframe: "0.0.3087",
 } as const;

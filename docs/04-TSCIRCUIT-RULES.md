@@ -19,16 +19,20 @@
 
 Les gates sont des verdicts produit construits **sur** les diagnostics natifs, pas des heuristiques locales (décision D20, audit doc 12) :
 
+**Règle d'or** (doc 12 §5) : une gate maison ne peut pas être plus stricte que le diagnostic natif correspondant sans ADR écrite ; en cas de conflit entre une règle locale et le natif, le natif fait foi par défaut. Version épinglée : `@tscircuit/checks` (dépendance directe + `overrides`, source unique `TSCIRCUIT_VERSIONS.checks` — P0-4 : la clé de cache inclut les versions).
+
 | Gate | Base officielle (skill / `@tscircuit/checks`) | Verdict NIATOLIP |
 |---|---|---|
 | G0 | Rendu d'évaluation, erreurs `*_error` du Circuit JSON | Aucune erreur d'évaluation |
-| G1 | `runAllNetlistChecks` (≈ `tsci check netlist`) + `pin_specification` | Netlist et exigences de broches propres |
-| G2 | `runAllPlacementChecks` (≈ `tsci check placement`, `schematic-placement` côté schéma) | Placement propre, rien hors carte |
-| G3 | `runAllRoutingChecks` (≈ `tsci check routing`, `shorts`, `pcb-style` selon disponibilité) | Routage complet, 0 net non routé |
+| G1 | `runAllNetlistChecks` + `runAllPinSpecificationChecks` (≈ `tsci check netlist`) | Netlist et exigences de broches propres (seuls `*_error` bloquent) |
+| G2 | `runAllPlacementChecks` (≈ `tsci check placement`) | Placement propre, rien hors carte (seuls `*_error` bloquent) |
+| G3 | `runAllRoutingChecks` sur copie — le runner mute son entrée (`addStartAndEndPortIdsIfMissing`, appelé aussi via `checkEachPcbTraceNonOverlapping` qui couvre les self-shorts, ≈ `tsci check routing`) | Routage complet, 0 net non routé (seuls `*_error` bloquent ; jamais jugée si G2 rouge) |
 | G4 | `kicad-cli` ERC/DRC sur l'export KiCad (worker Docker) | Inchangé — juge externe, voir doc 05 |
 | G5 | Scindée **G5-PCB / G5-PCBA** (doc 15 §4.4) : PnP officiel, couverture BOM, DRC fabricant JLCPCB | Selon le mode d'assemblage du projet |
 
 Pendant le développement, suivre la philosophie du skill officiel : rendre d'abord le circuit correct, traiter les diagnostics dans l'ordre netlist → placement → routage. La séquence bloquante « export validé » est imposée par le serveur (P0), pas par l'ordre d'appel des outils.
+
+> Tranché (P0-1) : `runAllSchematicChecks` n'est volontairement jamais appelé — ses 4 checks sont cosmétiques (`schematic_component_styling_warning`, doc 12 §4.1) et n'ont rien à dire sur la fabricabilité. Les self-shorts cuivre sont couverts par `runAllRoutingChecks` via `checkEachPcbTraceNonOverlapping`.
 
 ## 3. Périmètre et contraintes produit
 

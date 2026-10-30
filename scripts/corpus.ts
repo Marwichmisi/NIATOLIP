@@ -115,14 +115,21 @@ async function runCardInner(
     | undefined;
 
   // Verdict faisant foi : réévaluation serveur + toutes les gates G0→G3.
+  // Mesure de référence P1-1 : verdict natif pur, quarantaine ignorée
+  // explicitement (pas de divergenceDir) — la référence doit rester stable
+  // même si une règle est quarantinée côté agent. Les divergences éventuelles
+  // sur des cartes saines sont remontées dans gateErrors (signal, pas verdict).
   const files = await getWorkingFiles(projectId);
   const entry = resolveEntrypoint(files);
   const full = await evaluateFullServer(files, entry);
-  const { reports, allPass } = runAllGates(full.summary, full.circuitJson);
+  const { reports, allPass, divergences } = await runAllGates(full.summary, full.circuitJson);
   const versions = await listVersions(projectId).catch(() => []);
   const gateErrors = reports
     .flatMap((r) => r.findings.filter((f) => f.severity === "error"))
     .map((f) => `${f.gate}/${f.code}: ${f.message}`);
+  for (const d of divergences) {
+    gateErrors.push(`div/${d.gate}/${d.ruleCode}:${d.kind}`);
+  }
 
   return {
     id: card.id,

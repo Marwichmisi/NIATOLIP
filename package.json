@@ -5,6 +5,7 @@
   "overrides": {
     "@tscircuit/core": "0.0.2230",
     "@tscircuit/eval": "0.0.1668",
+    "@tscircuit/checks": "0.0.265",
     "circuit-json": "0.0.538"
   },
   "scripts": {
@@ -14,7 +15,8 @@
     "lint": "next lint",
     "benchmark:models": "tsx scripts/benchmark-models.ts",
     "corpus": "tsx scripts/corpus.ts",
-    "templates:check": "tsx scripts/templates-check.ts"
+    "templates:check": "tsx scripts/templates-check.ts",
+    "gates:fixtures": "tsx scripts/gates-fixtures.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.104",
@@ -37,6 +39,7 @@
     "@tscircuit/3d-viewer": "0.0.611",
     "@tscircuit/assembly-viewer": "0.0.7",
     "@tscircuit/capacity-autorouter": "0.0.1014",
+    "@tscircuit/checks": "0.0.265",
     "@tscircuit/circuit-json-util": "0.0.129",
     "@tscircuit/create-fdm-enclosure": "0.0.7",
     "@tscircuit/create-snippet-url": "0.0.16",

@@ -66,6 +66,7 @@ L'ancien découpage M0–M4 est abandonné : M0 et l'infrastructure M1/M2 sont l
 
 ## Backlog (non phasé, par valeur décroissante)
 
+- Budgets d'échecs différenciés par gate (doc 12 §6.3) : G1/G2 → 5 échecs sur la même gate puis escalade humaine, G3 → 3 tentatives avec variation imposée (non implémenté en P0-1 ; seul le générique « 2 échecs → changer de stratégie » existe).
 - Outil datasheet : récupération + extraction pinout, confirmation visuelle pin 1 avant H2.
 - Catalogue composants élargi au-delà des 20 catégories actuelles ; équivalents automatiques multi-sources.
 - Freerouting en option si l'autorouteur tscircuit plafonne sur le corpus (critères doc 09).

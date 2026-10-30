@@ -12,16 +12,18 @@
 
 | Gate | Contrôle | Exécuté par | Bloquant pour |
 |---|---|---|---|
-| G0 | Le code s'évalue sans erreur (`evaluateCircuit`) | WebWorker navigateur | Toute suite du run |
-| G1 | Netlist : connexions attendues présentes, aucun net critique non connecté (`checkNetlist`) | tscircuit | Placement |
-| G2 | Placement : aucun chevauchement, rien hors carte, espacements OK (`checkPlacement`) | tscircuit | Routage |
-| G3 | Routage : 0 net non routé, violations de routage = 0 (`checkRouting`) | tscircuit (autorouteur intégré) | Gate fabrication |
+| G0 | Le code s'évalue sans erreur (éléments `*_error` du rendu, `summarizeCircuitJson`) | WebWorker navigateur + CircuitRunner serveur | Toute suite du run |
+| G1 | Netlist native : `runAllNetlistChecks` + `runAllPinSpecificationChecks` (seuls `*_error` bloquent) | Serveur (copie d'évaluation) | Placement |
+| G2 | Placement natif : `runAllPlacementChecks` (seuls `*_error` bloquent) | Serveur | Routage |
+| G3 | Routage natif : `runAllRoutingChecks` sur copie — le runner mute son entrée (seuls `*_error` bloquent ; jamais jugée si G2 rouge car le core skippe le routage) | Serveur (autorouteur intégré) | Gate fabrication |
 | G4 | ERC + DRC sur le fichier KiCad exporté (`kicad-cli sch erc` / `pcb drc`, format JSON, code de sortie pris en compte) | Worker KiCad | Revue H2 |
 | G5 | Fabricabilité : BOM complète avec références LCSC en stock revérifiées, PnP cohérent avec la BOM, Gerber généré sans erreur | Worker + jlcsearch | Export du pack |
 
 Règles :
 
-- Les gates sont **séquentielles** : interdiction de valider G3 si G2 est rouge.
+- Les gates sont **séquentielles** : une gate n'est jamais jugée si une gate antérieure est rouge (G1 bloquée si G0 rouge, G2 si G0/G1, G3 si G0/G1/G2 — rapport `judged: false` + `blocked`). Interdiction de valider G3 si G2 est rouge. Les outils `check*` et `evaluateCircuit` propagent `judged`/`blocked` tels quels : une gate « non jugée » n'est jamais à « corriger ».
+- Protocole anti-« gate menteuse » (doc 12 §6) : divergence {verdict × erreurs natives du rendu} journalisée (`gate-divergences.jsonl`, sous `projects/.cache/gates/`, globale au déploiement par choix — le comportement d'une règle native dépend de la version des checks, pas du projet ; volatil comme le cache d'éval), 3 hashes distincts sur la même règle → quarantaine auto (`error → warning` + escalade humaine, réactivation uniquement par humain). Un snapshot pris sous verdict déclassé est tamponné (« quarantaine: … ») dans son libellé et remonté (`quarantined`) dans la réponse d'évaluation. Corpus et `templates:check` sont des mesures de référence : quarantaine explicitement ignorée, divergences remontées en clair.
+- Garde-fou de boucle actuel : consigne « 2 échecs identiques → changer de stratégie » (`noteFailure`). Les budgets différenciés doc 12 §6.3 (G1/G2 : 5 échecs puis escalade, G3 : 3 tentatives avec variation imposée) ne sont **pas** implémentés — voir backlog.
 - Un échec de gate renvoie à l'agent un rapport structuré (type, sévérité, composant/net concerné, message) — jamais un simple « ça a échoué ».
 - Aucun contournement par l'agent : il ne peut ni abaisser un seuil, ni marquer une gate comme passée manuellement.
 - L'utilisateur peut télécharger un projet **non validé** (export KiCad/code source) à tout moment, mais le pack fabrication « validé » exige G0–G5 verts + H2.
