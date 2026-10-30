@@ -501,10 +501,11 @@ export default function Home() {
   }, [projectId, running, model, refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo, reportSegmentError]);
 
   /** Reprise du tour après APPROBATION explicite (même message agent, même projet, même modèle).
-   *  Un refus n'appelle jamais ceci : handleDeny annule la gate sans relancer
-   *  (doc 06 §2.2 : « focus remis dans le chat ») — le run suivant repart
-   *  du message de modification de l'utilisateur. */
-  const continueTurn = useCallback(async () => {
+   *  `reason` porte les modifications de l'utilisateur (plan/BOM corrigé) :
+   *  le modèle les reçoit dans tool-approval-response et les applique avant
+   *  de continuer — sans redemander. Un refus n'appelle jamais ceci :
+   *  handleDeny annule la gate sans relancer (doc 06 §2.2). */
+  const continueTurn = useCallback(async (reason?: string) => {
     const pending = pendingRef.current;
     const resume = resumeRef.current;
     if (!pending || !resume) return;
@@ -515,7 +516,7 @@ export default function Home() {
     setSteps((prev) =>
       prev.map((s) =>
         s.id === `t-${pending.toolCallId}`
-          ? { ...s, status: "running" as const, detail: "Approuvé — reprise du run…" }
+          ? { ...s, status: "running" as const, detail: reason ? "Approuvé avec modifications — reprise…" : "Approuvé — reprise du run…" }
           : s
       )
     );
@@ -524,7 +525,11 @@ export default function Home() {
         toolName: pending.toolName,
         toolCallId: pending.toolCallId,
         input: pending.input ?? null,
-        approval: { id: pending.approvalId, approved: true },
+        approval: {
+          id: pending.approvalId,
+          approved: true,
+          ...(reason ? { reason: reason.slice(0, 2000) } : {}),
+        },
       };
       const assistantMsg: ChatMsg = {
         role: "agent",
@@ -597,6 +602,10 @@ export default function Home() {
 
   const handleApprove = useCallback(() => {
     void continueTurn();
+  }, [continueTurn]);
+
+  const handleApproveWithReason = useCallback((reason: string) => {
+    void continueTurn(reason);
   }, [continueTurn]);
 
   const handleDeny = useCallback(() => {
@@ -689,6 +698,7 @@ export default function Home() {
           runSteps={runSteps}
           pendingApproval={pendingApproval}
           onApprove={handleApprove}
+          onApproveWithReason={handleApproveWithReason}
           onDeny={handleDeny}
           endState={endState}
           exportUrl={exportUrl}

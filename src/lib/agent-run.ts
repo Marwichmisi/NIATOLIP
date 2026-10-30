@@ -531,7 +531,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         approved: true,
         at: new Date().toISOString(),
         plan: input.title,
-        next: "Plan approuvé — générer : sourcing, code, évaluation G0–G3.",
+        next: "Plan approuvé — génère : sourcing, code, évaluation G0–G3. SI l'approbation contenait des modifications (consigne / plan corrigé), APPLIQUE-LES D'ABORD : le contenu corrigé remplace ta proposition (dimensions, composants, valeurs) — ne redemande jamais.",
       }),
     }),
 
@@ -562,7 +562,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         approved: true,
         at: new Date().toISOString(),
         items: input.bom.length,
-        next: "Revue approuvée — appeler exportPack.",
+        next: "Revue approuvée — appeler exportPack. SI l'approbation contenait des modifications (consigne / revue corrigée), APPLIQUE-LES D'ABORD (corriger code/BOM, réévaluer G0–G3) avant exportPack — ne redemande jamais.",
       }),
     }),
 

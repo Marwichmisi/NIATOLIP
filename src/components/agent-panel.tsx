@@ -29,7 +29,7 @@ export interface ChatMsg {
     input: unknown;
     output?: unknown;
     error?: string;
-    approval?: { id: string; approved: boolean };
+    approval?: { id: string; approved: boolean; reason?: string };
   }>;
 }
 
@@ -63,7 +63,7 @@ function Elapsed({ startedAt }: { startedAt: number }) {
 
 export function AgentPanel({
   steps, running, messages, onSend, onStop, onContinue,
-  model, onModelChange, runCost, runSteps, pendingApproval, onApprove, onDeny,
+  model, onModelChange, runCost, runSteps, pendingApproval, onApprove, onApproveWithReason, onDeny,
   endState, exportUrl, style, focusKey,
 }: {
   steps: AgentStep[];
@@ -78,6 +78,7 @@ export function AgentPanel({
   runSteps: { steps: number; max: number } | null;
   pendingApproval: ApprovalRequest | null;
   onApprove: () => void;
+  onApproveWithReason: (reason: string) => void;
   onDeny: () => void;
   endState: EndState | null;
   exportUrl: string | null;
@@ -182,10 +183,10 @@ export function AgentPanel({
           ))}
 
           {pendingApproval?.toolName === "requestPlanApproval" && (
-            <PlanCard input={pendingApproval.input} onApprove={onApprove} onDeny={denyAndEdit} />
+            <PlanCard key={pendingApproval.approvalId} input={pendingApproval.input} onApprove={onApprove} onApproveWithReason={onApproveWithReason} onDeny={denyAndEdit} />
           )}
           {pendingApproval?.toolName === "requestFinalApproval" && (
-            <FinalCard input={pendingApproval.input} onApprove={onApprove} onDeny={denyAndEdit} />
+            <FinalCard key={pendingApproval.approvalId} input={pendingApproval.input} onApprove={onApprove} onApproveWithReason={onApproveWithReason} onDeny={denyAndEdit} />
           )}
           {pendingApproval?.toolName === "exportPack" && (
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
@@ -275,17 +276,96 @@ interface PlanInput {
   board?: unknown; costEstimateUsd?: unknown; notes?: unknown;
 }
 
-function PlanCard({ input, onApprove, onDeny }: { input: unknown; onApprove: () => void; onDeny: () => void }) {
+const inputCls = "w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring";
+
+function PlanCard({ input, onApprove, onApproveWithReason, onDeny }: {
+  input: unknown; onApprove: () => void; onApproveWithReason: (reason: string) => void; onDeny: () => void;
+}) {
   const p = (input ?? {}) as PlanInput;
-  const comps = Array.isArray(p.components) ? (p.components as PlanComponent[]).slice(0, 30) : [];
+  const initComps = (Array.isArray(p.components) ? p.components as PlanComponent[] : []).slice(0, 30).map((c) => ({
+    ref: String(c.ref ?? ""), value: String(c.value ?? ""),
+    lcsc: String(c.lcsc ?? ""), role: String(c.role ?? ""),
+  }));
   const board = (p.board ?? {}) as { widthMm?: unknown; depthMm?: unknown; layers?: unknown };
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(String(p.title ?? ""));
+  const [objective, setObjective] = useState(String(p.objective ?? ""));
+  const [width, setWidth] = useState(String(board.widthMm ?? ""));
+  const [depth, setDepth] = useState(String(board.depthMm ?? ""));
+  const [layers, setLayers] = useState(String(board.layers ?? "2"));
+  const [cost, setCost] = useState(typeof p.costEstimateUsd === "number" ? String(p.costEstimateUsd) : "");
+  const [notes, setNotes] = useState(String(p.notes ?? ""));
+  const [comps, setComps] = useState(initComps.length > 0 ? initComps : [{ ref: "", value: "", lcsc: "", role: "" }]);
+  const [consigne, setConsigne] = useState("");
+  const compsShown = Array.isArray(p.components) ? (p.components as PlanComponent[]).slice(0, 30) : [];
+
+  const setComp = (i: number, k: "ref" | "value" | "lcsc" | "role", v: string) =>
+    setComps((prev) => prev.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
+
+  const applyWithChanges = () => {
+    const num = (s: string) => { const n = Number(String(s).replace(",", ".")); return Number.isFinite(n) && n > 0 ? n : undefined; };
+    const corrected = {
+      title: title.trim() || String(p.title ?? "sans titre"),
+      objective: objective.trim(),
+      components: comps
+        .filter((c) => c.ref.trim() || c.value.trim())
+        .map((c) => ({ ref: c.ref.trim(), value: c.value.trim(), ...(c.lcsc.trim() ? { lcsc: c.lcsc.trim() } : {}), ...(c.role.trim() ? { role: c.role.trim() } : {}) })),
+      board: { ...(num(width) ? { widthMm: num(width) } : {}), ...(num(depth) ? { depthMm: num(depth) } : {}), layers: Math.min(4, Math.max(1, Math.round(num(layers) ?? 2))) },
+      ...(num(cost) ? { costEstimateUsd: num(cost) } : {}),
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+    };
+    const reason = [
+      consigne.trim() ? `Consigne de l'utilisateur : ${consigne.trim()}` : "Plan corrigé directement par l'utilisateur.",
+      `Plan corrigé (remplace la proposition) : ${JSON.stringify(corrected)}`,
+    ].join("\n");
+    onApproveWithReason(reason);
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+        <p className="text-[13px] font-medium">Gate H1 — modifier le plan</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">Corrige les champs ou décris la modification : reprise immédiate, sans redemander.</p>
+        <div className="mt-2 space-y-1.5">
+          <input aria-label="Titre du plan" value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
+          <textarea aria-label="Objectif" value={objective} onChange={(e) => setObjective(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+          <div className="flex gap-1.5">
+            <input aria-label="Largeur mm" value={width} onChange={(e) => setWidth(e.target.value)} inputMode="decimal" placeholder="L mm" className={inputCls} />
+            <input aria-label="Profondeur mm" value={depth} onChange={(e) => setDepth(e.target.value)} inputMode="decimal" placeholder="l mm" className={inputCls} />
+            <input aria-label="Couches" value={layers} onChange={(e) => setLayers(e.target.value)} inputMode="numeric" placeholder="couches" className={inputCls} />
+            <input aria-label="Coût estimé USD" value={cost} onChange={(e) => setCost(e.target.value)} inputMode="decimal" placeholder="≈ $" className={inputCls} />
+          </div>
+          {comps.map((c, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input aria-label={`Repère ${i + 1}`} value={c.ref} onChange={(e) => setComp(i, "ref", e.target.value)} placeholder="U1" className={`${inputCls} w-14 shrink-0 font-mono`} />
+              <input aria-label={`Valeur ${i + 1}`} value={c.value} onChange={(e) => setComp(i, "value", e.target.value)} placeholder="valeur" className={inputCls} />
+              <input aria-label={`LCSC ${i + 1}`} value={c.lcsc} onChange={(e) => setComp(i, "lcsc", e.target.value)} placeholder="LCSC" className={`${inputCls} w-20 shrink-0 font-mono`} />
+              <button type="button" onClick={() => setComps((prev) => prev.filter((_, j) => j !== i))} title="Retirer ce composant" aria-label={`Retirer le composant ${i + 1}`} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          <button type="button" onClick={() => setComps((prev) => [...prev.slice(0, 29), { ref: "", value: "", lcsc: "", role: "" }])} className="text-[11px] text-primary hover:underline">
+            + Ajouter un composant
+          </button>
+          <input aria-label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Points à valider…" className={inputCls} />
+          <textarea aria-label="Consigne de modification" value={consigne} onChange={(e) => setConsigne(e.target.value)} rows={2} placeholder="Ou décris la modification en une phrase…" className={`${inputCls} resize-none`} />
+        </div>
+        <div className="mt-2.5 flex gap-2">
+          <Button size="sm" onClick={applyWithChanges}><Check /> Appliquer et reprendre</Button>
+          <Button size="sm" variant="outline" onClick={onDeny}><Pencil /> Écrire dans le chat</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
       <p className="text-[13px] font-medium">Gate H1 — plan proposé : {String(p.title ?? "sans titre")}</p>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{String(p.objective ?? "")}</p>
-      {comps.length > 0 && (
+      {compsShown.length > 0 && (
         <ul className="mt-2 space-y-1">
-          {comps.map((c, i) => (
+          {compsShown.map((c, i) => (
             <li key={i} className="font-mono text-[11px] text-foreground/90">
               {String(c.ref ?? "?")} · {String(c.value ?? "?")}
               {typeof c.lcsc === "string" && c.lcsc && <span className="text-muted-foreground"> · {c.lcsc}</span>}
@@ -302,7 +382,7 @@ function PlanCard({ input, onApprove, onDeny }: { input: unknown; onApprove: () 
       {typeof p.notes === "string" && p.notes && <p className="mt-1 text-xs text-muted-foreground">{p.notes}</p>}
       <div className="mt-2.5 flex gap-2">
         <Button size="sm" onClick={onApprove}><Check /> Approuver</Button>
-        <Button size="sm" variant="outline" onClick={onDeny}><Pencil /> Modifier</Button>
+        <Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil /> Modifier</Button>
       </div>
     </div>
   );
@@ -312,11 +392,48 @@ interface BomRow { ref?: unknown; value?: unknown; pkg?: unknown; lcsc?: unknown
 interface GateRowState { gate?: unknown; status?: unknown; note?: unknown }
 interface FinalInput { summary?: unknown; bom?: unknown; gates?: unknown; limits?: unknown }
 
-function FinalCard({ input, onApprove, onDeny }: { input: unknown; onApprove: () => void; onDeny: () => void }) {
+function FinalCard({ input, onApprove, onApproveWithReason, onDeny }: {
+  input: unknown; onApprove: () => void; onApproveWithReason: (reason: string) => void; onDeny: () => void;
+}) {
   const f = (input ?? {}) as FinalInput;
   const bom = Array.isArray(f.bom) ? (f.bom as BomRow[]).slice(0, 100) : [];
   const gates = Array.isArray(f.gates) ? (f.gates as GateRowState[]).slice(0, 8) : [];
-  const limits = Array.isArray(f.limits) ? (f.limits as unknown[]).filter((l) => typeof l === "string").slice(0, 10) as string[] : [];
+  const initLimits = Array.isArray(f.limits) ? (f.limits as unknown[]).filter((l) => typeof l === "string").slice(0, 10) as string[] : [];
+  const [editing, setEditing] = useState(false);
+  const [summary, setSummary] = useState(String(f.summary ?? ""));
+  const [limits, setLimits] = useState(initLimits.join("\n"));
+  const [consigne, setConsigne] = useState("");
+
+  const applyWithChanges = () => {
+    const corrected = {
+      summary: summary.trim(),
+      limits: limits.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 10),
+    };
+    const reason = [
+      consigne.trim() ? `Consigne de l'utilisateur : ${consigne.trim()}` : "Revue corrigée directement par l'utilisateur.",
+      `Revue corrigée (remplace la proposition) : ${JSON.stringify(corrected)}`,
+    ].join("\n");
+    onApproveWithReason(reason);
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+        <p className="text-[13px] font-medium">Gate H2 — modifier la revue</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">La BOM vient des recherches réelles (non éditable ici) — corrige le résumé, les limites ou décris la modification.</p>
+        <div className="mt-2 space-y-1.5">
+          <textarea aria-label="Résumé corrigé" value={summary} onChange={(e) => setSummary(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+          <textarea aria-label="Limites, une par ligne" value={limits} onChange={(e) => setLimits(e.target.value)} rows={3} placeholder="Limites, une par ligne…" className={`${inputCls} resize-none font-mono`} />
+          <textarea aria-label="Consigne de modification" value={consigne} onChange={(e) => setConsigne(e.target.value)} rows={2} placeholder="Ex. remplace la LED par une verte, resserre la carte en 30×25…" className={`${inputCls} resize-none`} />
+        </div>
+        <div className="mt-2.5 flex gap-2">
+          <Button size="sm" onClick={applyWithChanges}><Check /> Appliquer et reprendre</Button>
+          <Button size="sm" variant="outline" onClick={onDeny}><Pencil /> Écrire dans le chat</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
       <p className="text-[13px] font-medium">Gate H2 — revue avant export</p>
@@ -354,14 +471,14 @@ function FinalCard({ input, onApprove, onDeny }: { input: unknown; onApprove: ()
           </table>
         </div>
       )}
-      {limits.length > 0 && (
+      {initLimits.length > 0 && (
         <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
-          {limits.map((l, i) => <li key={i}>{l}</li>)}
+          {initLimits.map((l, i) => <li key={i}>{l}</li>)}
         </ul>
       )}
       <div className="mt-2.5 flex gap-2">
         <Button size="sm" onClick={onApprove}><Check /> Approuver et exporter</Button>
-        <Button size="sm" variant="outline" onClick={onDeny}><Pencil /> Modifier</Button>
+        <Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil /> Modifier</Button>
       </div>
     </div>
   );

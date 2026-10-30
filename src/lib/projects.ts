@@ -51,6 +51,8 @@ export interface StoredToolPart {
   input: unknown;
   output?: unknown;
   error?: string;
+  /** Approbation H1/H2/export (mémoire : le modèle sait ce qui fut approuvé et avec quelles modifications). */
+  approval?: { id: string; approved: boolean; reason?: string };
 }
 
 const MAX_PARTS_PER_MESSAGE = 100;
@@ -76,6 +78,14 @@ function validateParts(parts: unknown): StoredToolPart[] | undefined {
     };
     if (part.output !== undefined) clean.output = part.output;
     if (typeof part.error === "string") clean.error = part.error.slice(0, 2000);
+    const ap = part.approval as { id?: unknown; approved?: unknown; reason?: unknown } | undefined;
+    if (ap && typeof ap.id === "string" && typeof ap.approved === "boolean") {
+      clean.approval = {
+        id: ap.id.slice(0, 80),
+        approved: ap.approved,
+        ...(typeof ap.reason === "string" && ap.reason ? { reason: ap.reason.slice(0, 2000) } : {}),
+      };
+    }
     const size = JSON.stringify(clean).length;
     if (size > MAX_PART_JSON) err("invalid_message", `Partie d'outil trop grosse (${size} > ${MAX_PART_JSON}).`);
     out.push(clean);

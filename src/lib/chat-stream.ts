@@ -15,7 +15,7 @@ export interface ToolPartIn {
   output?: unknown;
   error?: string;
   /** Réponse d'approbation (reprise H1/H2/export) — renvoyée au run suivant. */
-  approval?: { id: string; approved: boolean };
+  approval?: { id: string; approved: boolean; reason?: string };
 }
 
 export interface ChatMsgIn {
@@ -81,7 +81,13 @@ function toUIMessages(msgs: ChatMsgIn[]): UIMessageOut[] {
             toolCallId: id,
             state: "approval-responded",
             input: p.input ?? null,
-            approval: { id: p.approval.id.slice(0, 80), approved: p.approval.approved },
+            approval: {
+              id: p.approval.id.slice(0, 80),
+              approved: p.approval.approved,
+              ...(typeof p.approval.reason === "string" && p.approval.reason
+                ? { reason: p.approval.reason.slice(0, 2000) }
+                : {}),
+            },
           });
         } else if (typeof p.error === "string") {
           parts.push({
