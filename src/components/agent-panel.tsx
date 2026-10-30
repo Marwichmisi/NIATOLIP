@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { SUGGESTIONS, type AgentStep } from "@/data/mock";
+import type { AgentStep } from "@/data/mock";
 import type { ApprovalRequest } from "@/lib/chat-stream";
 import { cn } from "@/lib/utils";
 
@@ -225,14 +225,6 @@ export function AgentPanel({
       </div>
 
       <div className="shrink-0 border-t border-border p-3">
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {SUGGESTIONS.map((s) => (
-            <button key={s} type="button" onClick={() => onSend(s)} disabled={running}
-              className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50">
-              {s}
-            </button>
-          ))}
-        </div>
         <div className="flex items-end gap-2 rounded-xl border border-input bg-background p-2 focus-within:ring-2 focus-within:ring-ring">
           <label className="sr-only" htmlFor="chat-input">Message à l'agent</label>
           <textarea

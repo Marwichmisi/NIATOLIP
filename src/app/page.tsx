@@ -297,6 +297,21 @@ export default function Home() {
     pollRef.current = setInterval(() => void tick(), 2000);
   }, [stopPoll]);
 
+  /** Affiche l'erreur RÉELLE d'un segment (registre serveur, pas le « An error occurred » générique). */
+  const reportSegmentError = useCallback(async (runId: string | null, fallback: string) => {
+    let detail = fallback;
+    try {
+      if (runId) {
+        const st = await api<{ run: { error: string | null } }>(`/api/chat/${runId}`);
+        if (st.run.error) detail = st.run.error;
+      }
+    } catch {
+      // Registre indisponible : on garde le message du stream.
+    }
+    const text = `Run échoué : ${detail.slice(0, 500)}`;
+    setMessages((m) => [...m, { role: "agent", text }]);
+    finalizedRef.current = messagesRef.current.length;
+  }, []);
   /** Un segment de stream (run initial ou reprise après approbation). */
   const streamSegment = useCallback(async (opts: {
     serverMessages: ChatMsg[];
@@ -306,7 +321,7 @@ export default function Home() {
     baseText: string;
     baseParts: ToolPartIn[];
     ctrl: AbortController;
-  }): Promise<{ text: string; runId: string | null; parts: ToolPartIn[]; pending: ApprovalRequest | null }> => {
+  }): Promise<{ text: string; runId: string | null; parts: ToolPartIn[]; pending: ApprovalRequest | null; streamError: string | null }> => {
     const result = await streamChat({
       messages: opts.serverMessages,
       model: opts.choice,
@@ -378,7 +393,13 @@ export default function Home() {
           }),
       },
     });
-    return { text: result.text, runId: result.runId, parts: [...opts.baseParts, ...result.parts], pending: result.pendingApproval };
+    return {
+      text: result.text,
+      runId: result.runId,
+      parts: [...opts.baseParts, ...result.parts],
+      pending: result.pendingApproval,
+      streamError: result.streamError,
+    };
   }, []);
 
   const runChat = useCallback(async (text: string) => {
@@ -424,6 +445,9 @@ export default function Home() {
         if (!seg.pending) {
           // Segment final : le message agent est finalisé (persisté).
           finalizedRef.current = assistantIdx;
+          if (seg.streamError) {
+            await reportSegmentError(seg.runId, seg.streamError);
+          }
           // Cause de fin : plafond d'étapes, budget, ou fin normale.
           try {
             if (seg.runId) {
@@ -474,10 +498,13 @@ export default function Home() {
         await refreshProjectState();
       }
     }
-  }, [projectId, running, model, refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo]);
+  }, [projectId, running, model, refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo, reportSegmentError]);
 
-  /** Reprise du tour après clic sur une gate (même message agent, même projet, même modèle). */
-  const continueTurn = useCallback(async (approved: boolean) => {
+  /** Reprise du tour après APPROBATION explicite (même message agent, même projet, même modèle).
+   *  Un refus n'appelle jamais ceci : handleDeny annule la gate sans relancer
+   *  (doc 06 §2.2 : « focus remis dans le chat ») — le run suivant repart
+   *  du message de modification de l'utilisateur. */
+  const continueTurn = useCallback(async () => {
     const pending = pendingRef.current;
     const resume = resumeRef.current;
     if (!pending || !resume) return;
@@ -488,7 +515,7 @@ export default function Home() {
     setSteps((prev) =>
       prev.map((s) =>
         s.id === `t-${pending.toolCallId}`
-          ? { ...s, status: approved ? ("running" as const) : ("denied" as const), detail: approved ? "Approuvé — reprise du run…" : "Refusé — dites quoi modifier." }
+          ? { ...s, status: "running" as const, detail: "Approuvé — reprise du run…" }
           : s
       )
     );
@@ -497,7 +524,7 @@ export default function Home() {
         toolName: pending.toolName,
         toolCallId: pending.toolCallId,
         input: pending.input ?? null,
-        approval: { id: pending.approvalId, approved },
+        approval: { id: pending.approvalId, approved: true },
       };
       const assistantMsg: ChatMsg = {
         role: "agent",
@@ -523,6 +550,9 @@ export default function Home() {
         if (!seg.pending) {
           finalizedRef.current = resume.assistantIdx;
           resumeRef.current = null;
+          if (seg.streamError) {
+            await reportSegmentError(seg.runId, seg.streamError);
+          }
           try {
             if (seg.runId) {
               const st = await api<{ run: { steps: number; maxSteps: number; costUsd: number; maxCostUsd: number } }>(
@@ -563,16 +593,44 @@ export default function Home() {
         await refreshProjectState();
       }
     }
-  }, [refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo]);
+  }, [refreshProjectState, streamSegment, startPoll, stopPoll, currentVersionNo, reportSegmentError]);
 
   const handleApprove = useCallback(() => {
-    void continueTurn(true);
+    void continueTurn();
   }, [continueTurn]);
 
   const handleDeny = useCallback(() => {
-    setFocusKey((k) => k + 1); // le panneau pré-remplit « Modifie : » et focusse
-    void continueTurn(false);
-  }, [continueTurn]);
+    // Refus de gate : on ANNULE, on ne relance rien. Le message agent
+    // (texte + outils déjà exécutés) est finalisé pour la mémoire, puis une
+    // note invite à préciser les modifications. Le panneau pré-remplit
+    // « Modifie : » et focusse le champ (doc 06 §2.2).
+    const pending = pendingRef.current;
+    const resume = resumeRef.current;
+    pendingRef.current = null;
+    resumeRef.current = null;
+    setPendingApproval(null);
+    setFocusKey((k) => k + 1);
+    if (pending && resume) {
+      const rid = pending.toolCallId;
+      setSteps((prev) => prev.map((s) =>
+        s.id === `t-${rid}` ? { ...s, status: "denied" as const, detail: "Refusé — précisez vos modifications." } : s
+      ));
+      const frozen: ToolPartIn[] = resume.baseParts;
+      setMessages((m) => {
+        const next = [...m];
+        const last = next[resume.assistantIdx];
+        if (last?.role === "agent") next[resume.assistantIdx] = { ...last, parts: frozen.length > 0 ? frozen : last.parts };
+        return next;
+      });
+      finalizedRef.current = resume.assistantIdx;
+      setMessages((m) => [...m, { role: "agent", text: "Gate refusée — rien n'a été exécuté sans votre accord. Précisez vos modifications ci-dessous puis Envoyer." }]);
+      finalizedRef.current = messagesRef.current.length;
+    }
+    abortRef.current = null;
+    setRunning(false);
+    stopPoll();
+    void refreshProjectState();
+  }, [refreshProjectState, stopPoll]);
 
   const handleSend = (text: string) => {
     void runChat(text);

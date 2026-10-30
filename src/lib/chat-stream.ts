@@ -151,6 +151,7 @@ export async function streamChat(opts: {
   parts: ToolPartIn[];
   pendingApproval: ApprovalRequest | null;
   finishReason: string | null;
+  streamError: string | null;
 }> {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -175,6 +176,7 @@ export async function streamChat(opts: {
   let text = "";
   let finishReason: string | null = null;
   let pendingApproval: ApprovalRequest | null = null;
+  let streamError: string | null = null;
   const toolNames = new Map<string, string>();
   const toolInputs = new Map<string, unknown>();
   const parts: ToolPartIn[] = [];
@@ -240,7 +242,10 @@ export async function streamChat(opts: {
       finishReason = typeof chunk.finishReason === "string" ? chunk.finishReason : "stop";
       opts.cb.onFinish?.(finishReason);
     } else if (type === "error") {
-      opts.cb.onError(String(chunk.errorText ?? "Erreur de stream").slice(0, 300));
+      // Le chunk d'erreur AI SDK est générique (« An error occurred ») :
+      // on le garde et la page ira chercher le détail dans le registre run.
+      streamError = String(chunk.errorText ?? "Erreur de stream").slice(0, 300);
+      opts.cb.onError(streamError);
     }
   };
 
@@ -262,5 +267,5 @@ export async function streamChat(opts: {
       }
     }
   }
-  return { text, runId, parts, pendingApproval, finishReason };
+  return { text, runId, parts, pendingApproval, finishReason, streamError };
 }
