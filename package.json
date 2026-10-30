@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "benchmark:models": "tsx scripts/benchmark-models.ts"
+    "benchmark:models": "tsx scripts/benchmark-models.ts",
+    "corpus": "tsx scripts/corpus.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.104",
