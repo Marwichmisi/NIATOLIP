@@ -51,10 +51,10 @@ function maxCostUsd(): number {
 
 // Seuil de compaction auto (caractères JSON de l'historique) : au-delà, les
 // vieux échanges sont résumés et seuls les derniers sont gardés intacts.
-// Sans ça, renvoyer tout l'historique à chaque run coûte de plus en plus cher.
+// 500 000 tokens × ~4 caractères/token ≈ 2 000 000 (contexte modèle 1M).
 function compactThresholdChars(): number {
-  const raw = Number(process.env.NIATOLIP_COMPACT_CHARS ?? "120000");
-  return Number.isFinite(raw) && raw > 0 ? raw : 120000;
+  const raw = Number(process.env.NIATOLIP_COMPACT_CHARS ?? "2000000");
+  return Number.isFinite(raw) && raw > 0 ? raw : 2000000;
 }
 
 const COMPACT_KEEP_LAST = 8;
