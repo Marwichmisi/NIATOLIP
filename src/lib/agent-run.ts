@@ -32,8 +32,11 @@ import { TSCIRCUIT_VERSIONS } from "./toy-circuit";
 import {
   createValidationJob,
   getValidationJob,
+  isJobGreenForExport,
   summarizeJobForAgent,
 } from "./validation";
+import { hasValidH2, recordApproval } from "./approvals";
+import { assertSequenceForValidation, resolveEntrypoint } from "./sequence";
 import {
   getComponentDetails,
   searchComponents,
@@ -125,13 +128,7 @@ function validatePath(path: string): void {
   }
 }
 
-function resolveEntrypoint(files: Record<string, string>): string {
-  if (typeof files["main.tsx"] === "string") return "main.tsx";
-  if (typeof files["index.tsx"] === "string") return "index.tsx";
-  const first = Object.keys(files).filter((p) => p.endsWith(".tsx")).sort()[0];
-  if (!first) throw new Error("Aucun fichier .tsx dans le projet.");
-  return first;
-}
+// resolveEntrypoint partagé : voir src/lib/sequence.ts (P0-3).
 
 // Hash fort du contenu (clé du cache disque) — best-effort, jamais bloquant.
 // Le cache vit dans PROJECTS_DIR/.cache (éphémère en conteneur : volatil au
@@ -615,17 +612,26 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         costEstimateUsd: z.number().nonnegative().max(10000).optional().describe("Estimation composants en USD."),
         notes: z.string().max(1000).optional().describe("Points à valider humainement."),
       }),
-      execute: async (input) => ({
-        approved: true,
-        at: new Date().toISOString(),
-        plan: input.title,
-        next: "Plan approuvé — génère : sourcing, code, évaluation G0–G3. SI l'approbation contenait des modifications (consigne / plan corrigé), APPLIQUE-LES D'ABORD : le contenu corrigé remplace ta proposition (dimensions, composants, valeurs) — ne redemande jamais.",
-      }),
+      execute: async (input) => {
+        // Preuve serveur H1 (même mécanisme que H2 — l'exécution ne tourne
+        // que sur approbation explicite).
+        await recordApproval(ctx.projectId, {
+          gate: "H1",
+          approved: true,
+          reason: typeof input.title === "string" ? input.title.slice(0, 500) : null,
+        });
+        return {
+          approved: true,
+          at: new Date().toISOString(),
+          plan: input.title,
+          next: "Plan approuvé — génère : sourcing, code, évaluation G0–G3. SI l'approbation contenait des modifications (consigne / plan corrigé), APPLIQUE-LES D'ABORD : le contenu corrigé remplace ta proposition (dimensions, composants, valeurs) — ne redemande jamais.",
+        };
+      },
     }),
 
     requestFinalApproval: tool({
       description:
-        "GATE H2 — OBLIGATOIRE avant export : présente la revue finale (BOM chiffrée avec LCSC/stock/prix issus de searchComponents, état des gates G0–G3, limites) et SUSPEND le run jusqu'à l'approbation explicite. N'appeler qu'à gates G0–G3 vertes.",
+        "GATE H2 — OBLIGATOIRE avant export : présente la revue finale (BOM chiffrée avec LCSC/stock/prix issus de searchComponents, état des gates G0–G3, limites) et SUSPEND le run jusqu'à l'approbation explicite. N'appeler qu'à gates G0–G3 vertes et job G4/G5-PCB vert (passer jobId quand disponible — lie la revue au rapport ERC/DRC exact).",
       inputSchema: z.object({
         summary: z.string().min(1).max(1000).describe("Ce qui a été construit, en une phrase."),
         bom: z
@@ -645,13 +651,24 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
           .max(8)
           .describe("État G0–G3 (vertes exigées)."),
         limits: z.array(z.string().max(300)).max(10).default([]).describe("Limites et points à vérifier humainement."),
+        jobId: z.string().min(1).max(64).optional().describe("Job G4/G5-PCB vert revu (recommandé — lie H2 au rapport exact)."),
       }),
-      execute: async (input) => ({
-        approved: true,
-        at: new Date().toISOString(),
-        items: input.bom.length,
-        next: "Revue approuvée — appeler exportPack. SI l'approbation contenait des modifications (consigne / revue corrigée), APPLIQUE-LES D'ABORD (corriger code/BOM, réévaluer G0–G3) avant exportPack — ne redemande jamais.",
-      }),
+      execute: async (input) => {
+        // P0-3 : l'exécution ne tourne que sur approbation explicite
+        // (toolApproval user-approval) — l'enregistrement est la preuve serveur.
+        await recordApproval(ctx.projectId, {
+          gate: "H2",
+          approved: true,
+          jobId: input.jobId ?? null,
+          reason: typeof input.summary === "string" ? input.summary.slice(0, 500) : null,
+        });
+        return {
+          approved: true,
+          at: new Date().toISOString(),
+          items: input.bom.length,
+          next: "Revue approuvée — appeler exportManufacturingPack avec le même jobId. SI l'approbation contenait des modifications (consigne / revue corrigée), APPLIQUE-LES D'ABORD (corriger code/BOM, réévaluer G0–G3) avant exportManufacturingPack — ne redemande jamais.",
+        };
+      },
     }),
 
     exportPack: tool({
@@ -673,30 +690,32 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     requestManufacturingValidation: tool({
       description:
-        "FABRICATION G4/G5-PCB/G5-PCBA — fige la copie de travail en version puis lance un job worker KiCad (export KiCad + kicad-cli ERC/DRC + Gerber/BOM/PnP officiel + specs JLCPCB). N'appeler qu'à gates G0–G3 vertes. Le job est ASYNCHRONE : relever le jobId puis interroger getValidationResult.",
+        "FABRICATION G4/G5-PCB/G5-PCBA — le serveur RÉÉVALUE G0–G3 avant de figer la version puis lance un job worker KiCad (export KiCad + kicad-cli ERC/DRC + Gerber/BOM/PnP officiel + specs JLCPCB). N'appeler qu'à gates G0–G3 vertes. Le job est ASYNCHRONE : relever le jobId puis interroger getValidationResult.",
       inputSchema: z.object({
         label: z.string().max(120).optional().describe("Libellé de la version figée."),
-        g0g3: z
-          .array(z.object({ gate: z.string().max(4), status: z.string().max(12) }))
-          .max(8)
-          .optional()
-          .describe("État G0–G3 constaté (tracabilité du job)."),
       }),
-      execute: async ({ label, g0g3 }) => {
+      execute: async ({ label }) => {
+        // P0-3 : recalcul serveur, aucun champ g0g3 déclaré. Rouge → throw, rien figé.
+        const working = await getWorkingFiles(ctx.projectId);
+        const snapshot = await assertSequenceForValidation(working);
         const v = await createVersion(ctx.projectId, label ?? "validation KiCad (agent)");
         const { files } = await getVersionFiles(ctx.projectId, v.id);
         const job = await createValidationJob(ctx.projectId, files, {
           versionId: v.id,
           versionNo: v.version_no,
           label: label ?? "validation KiCad (agent)",
-          g0g3: g0g3 ?? null,
+          g0g3: snapshot,
         });
+        const sourcingNote =
+          snapshot.sourcing.untraced.length > 0
+            ? ` Traçabilité : ${snapshot.sourcing.verdict}`
+            : "";
         return {
           ok: true,
           jobId: job.id,
           snapshot: `v${v.version_no}`,
           status: job.status,
-          next: "Job queued — interrogez getValidationResult(jobId) jusqu'à done (worker Docker requis : `docker compose up --build`).",
+          next: "Job queued — interrogez getValidationResult(jobId) jusqu'à done (worker Docker requis : `docker compose up --build`)." + sourcingNote,
         };
       },
     }),
@@ -728,15 +747,25 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         if (job.projectId !== ctx.projectId) {
           throw new Error("Ce job appartient à un autre projet.");
         }
-        const g5pcb = job.g5_pcb ?? job.g5;
-        const g5pcba = job.g5_pcba ?? job.g5;
-        if (job.status !== "done" || job.g4?.status !== "pass" || g5pcb?.status !== "pass") {
+        if (!isJobGreenForExport(job)) {
+          const g5pcb = job.g5_pcb ?? job.g5;
+          const g5pcba = job.g5_pcba ?? job.g5;
           const detail =
             job.status !== "done"
               ? `job ${job.status} — attendez le worker (getValidationResult)`
               : `G4:${job.g4?.status ?? "?"} G5-PCB:${g5pcb?.status ?? "?"} G5-PCBA:${g5pcba?.status ?? "?"} — corrigez puis relancez`;
           throw new Error(`Pack validé refusé : ${detail}.`);
         }
+        // P0-3 : H2 vérifiée côté serveur (approbation postérieure au rapport).
+        const h2 = await hasValidH2(ctx.projectId, { id: job.id, finished_at: job.finished_at });
+        if (!h2.ok) {
+          throw new Error(
+            "Pack validé refusé : H2 non approuvée pour ce job (code h2_missing). " +
+              "Présentez requestFinalApproval avec jobId puis faites approuver avant exportManufacturingPack."
+          );
+        }
+        const g5pcb = job.g5_pcb ?? job.g5;
+        const g5pcba = job.g5_pcba ?? job.g5;
         const v = await createVersion(ctx.projectId, `Export fab validé (job ${jobId.slice(0, 8)})`);
         const pcbaWarnings = (g5pcba?.findings ?? []).filter((f) => f.severity === "warning").slice(0, 10).map((f) => `${f.code}: ${f.message}`);
         // R2 : mode surfacé (enforcement complet en #20).

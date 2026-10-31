@@ -116,6 +116,19 @@ create table if not exists artifacts (
 );
 create index if not exists idx_artifacts_job on artifacts(job_id);
 create index if not exists idx_artifacts_project on artifacts(project_id, created_at desc);
+// P0-3 : séquence serveur — approbations H1/H2/export vérifiables sans
+// faire confiance à l'historique client (issue #14).
+create table if not exists approvals (
+  id text primary key,
+  project_id text not null references projects(id) on delete cascade,
+  gate text not null,
+  approved boolean not null default false,
+  job_id text,
+  version_no integer,
+  reason text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_approvals_project on approvals(project_id, created_at desc);
 -- P0-2 : G5 scindée + mode d'assemblage (migration idempotente des bases existantes).
 alter table validation_jobs add column if not exists g5_pcb jsonb;
 alter table validation_jobs add column if not exists g5_pcba jsonb;

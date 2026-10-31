@@ -44,7 +44,8 @@ Base relationnelle (Postgres cible ; SQLite acceptable en prototype local). Les 
 | `/api/projects/:id/files` | GET | `fsMap` courant (alimente RunFrame) |
 | `/api/projects/:id/versions` | GET / POST | Liste des versions ; création d'un point de restauration |
 | `/api/projects/:id/versions/:vid/restore` | POST | Restauration |
-| `/api/projects/:id/validate` | POST | Crée un `validation_job` (worker KiCad) pour une version |
+| `/api/projects/:id/validate` | POST | Crée un `validation_job` (worker KiCad) pour une version — **P0-3** : `g0g3` recalculé serveur, `409 gates_not_green` si rouge (ni version ni job créés) |
+| `/api/projects/:id/approvals` | GET / POST | **P0-3** : vérité serveur H1/H2/export (`{ gate, approved, jobId?, reason? }`) — l'export validé exige une H2 postérieure au job |
 | `/api/validation-jobs/:id` | GET | Statut + rapports ERC/DRC |
 | `/api/projects/:id/export` | POST | Génère le pack fabrication (après H2) ; renvoie les artefacts |
 | `/api/artifacts/:id/download` | GET | Téléchargement authentifié d'un artefact |

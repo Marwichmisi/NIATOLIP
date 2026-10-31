@@ -410,6 +410,21 @@ export async function readArtifactContent(meta: ArtifactMeta): Promise<Buffer> {
   }
 }
 
+/** Le job ouvre-t-il droit au pack « validé » (G4 + G5-PCB verts) ? Partagé par
+ *  POST /export, l'outil agent et le garde du téléchargement (P0-3). */
+export function isJobGreenForExport(job: {
+  status: ValidationStatus;
+  g4: GateVerdict | null;
+  g5: GateVerdict | null;
+  g5_pcb: GateVerdict | null;
+}): boolean {
+  if (job.status !== "done" || job.g4?.status !== "pass") return false;
+  if (job.g5_pcb?.status === "pass") return true;
+  // Compat jobs pré-P0-2 : legacy g5 fait foi.
+  if (!job.g5_pcb && job.g5?.status === "pass") return true;
+  return false;
+}
+
 /** Résumé borné d'un job pour l'agent (jamais de JSON ERC/DRC brut). */
 export function summarizeJobForAgent(job: ValidationJob): Record<string, unknown> {
   const slice = (v: unknown): unknown => {

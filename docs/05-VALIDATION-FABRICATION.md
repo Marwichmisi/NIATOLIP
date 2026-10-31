@@ -1,6 +1,6 @@
 # Validation et fabrication — gates G0 à G5
 
-| Version | 1.0 — 2026-10-29 |
+| Version | 1.1 — 2026-10-31 (P0-3 : séquence serveur, issue #14) |
 |---|---|
 | Principe | **Un DRC propre prouve que les règles géométriques sont respectées, pas que la carte fonctionnera.** Les gates réduisent le risque ; elles ne le suppriment pas. La validation humaine H2 reste obligatoire. |
 
@@ -27,6 +27,7 @@ Règles :
 - Garde-fou de boucle actuel : consigne « 2 échecs identiques → changer de stratégie » (`noteFailure`). Les budgets différenciés doc 12 §6.3 (G1/G2 : 5 échecs puis escalade, G3 : 3 tentatives avec variation imposée) ne sont **pas** implémentés — voir backlog.
 - Un échec de gate renvoie à l'agent un rapport structuré (type, sévérité, composant/net concerné, message) — jamais un simple « ça a échoué ».
 - Aucun contournement par l'agent : il ne peut ni abaisser un seuil, ni marquer une gate comme passée manuellement.
+- **Séquence imposée côté serveur (P0-3, issue #14)** : `g0g3` est **recalculé** par le serveur (`src/lib/sequence.ts` : `evaluateFullServer` + `runAllGates` natifs) à chaque `POST /validate` et `requestManufacturingValidation` — le champ déclaré par l'appelant est ignoré. Snapshot rouge → `409 gates_not_green`, ni version ni job créés. La traçabilité sourcing (`parts.json` vs `.agent-searches.json`) est jointe au snapshot en **warning non bloquant** (D17). L'export « validé » (`POST /export`, `exportManufacturingPack`) exige en plus une **H2 serveur** postérieure au job (`src/lib/approvals.ts`, table `approvals` + `POST /projects/:id/approvals`, enregistrée aussi par l'outil `requestFinalApproval` et le clic UI). Les artefacts de fabrication (`gerber/bom/pnp/kicad`) d'un job non vert sont refusés au téléchargement (`409 gates_not_green`) — `sources.zip` et le rapport restent accessibles pour le debug.
 - L'utilisateur peut télécharger un projet **non validé** (export KiCad/code source) à tout moment, mais le pack fabrication « validé » exige G0–G4 + G5-PCB verts + H2. G5-PCBA souple (warnings) est étiquetée dans le pack, jamais bloquante.
 
 ## 2. Auto-revue visuelle (avant H2)

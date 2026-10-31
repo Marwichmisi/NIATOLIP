@@ -18,7 +18,8 @@
     "g5:fixtures": "tsx scripts/g5-fixtures.ts",
     "versions:check": "tsx scripts/versions-check.ts",
     "templates:check": "tsx scripts/templates-check.ts",
-    "gates:fixtures": "tsx scripts/gates-fixtures.ts"
+    "gates:fixtures": "tsx scripts/gates-fixtures.ts",
+    "p0-3:sequence": "tsx scripts/p0-3-sequence.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.104",

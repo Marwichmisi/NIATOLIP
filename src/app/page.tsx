@@ -609,6 +609,27 @@ export default function Home() {
     const pending = pendingRef.current;
     const resume = resumeRef.current;
     if (!pending || !resume) return;
+    // P0-3 : la preuve H2 est serveur. L'outil l'enregistre déjà dans son
+    // execute, mais on la persiste aussi ici (même clic) pour couvrir les
+    // exports HTTP directs : le jobId vient de l'input de la revue.
+    if (pending.toolName === "requestFinalApproval" || pending.toolName === "requestPlanApproval") {
+      try {
+        const input = (pending.input ?? {}) as Record<string, unknown>;
+        const jobId = typeof input.jobId === "string" ? input.jobId : undefined;
+        await fetch(`/api/projects/${resume.pid}/approvals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gate: pending.toolName === "requestFinalApproval" ? "H2" : "H1",
+            approved: true,
+            ...(jobId ? { jobId } : {}),
+            ...(reason ? { reason } : {}),
+          }),
+        });
+      } catch {
+        // Best-effort : l'outil enregistrera à la reprise.
+      }
+    }
     pendingRef.current = null;
     setPendingApproval(null);
     const ctrl = new AbortController();

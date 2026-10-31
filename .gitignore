@@ -15,11 +15,12 @@ build/
 *.pem
 *.key
 
-# Base locale / artefacts
+# Base locale / artefacts (racine uniquement — ne jamais ignorer
+# src/app/api/projects/* ni src/app/api/artifacts/*)
 *.db
 *.sqlite
-projects/
-artifacts/
+/projects/
+/artifacts/
 
 # Système
 .DS_Store
