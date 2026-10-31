@@ -9,6 +9,7 @@ if (typeof window !== "undefined") {
   throw new Error("src/lib/sequence.ts est serveur uniquement.");
 }
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { evaluateFullServer, runAllGates, type GateReport } from "./agent-gates";
 import { TSCIRCUIT_VERSIONS } from "./toy-circuit";
@@ -47,11 +48,22 @@ function gatesCacheDir(): string {
   return join(process.env.PROJECTS_DIR ?? join(process.cwd(), "projects"), ".cache", "gates");
 }
 
-function hashFilesForLog(files: Record<string, string>, entrypoint: string): string {
-  // Hash léger pour le journal de divergence (pas la clé de cache) : le
-  // contenu exact suffit, la version est portée par le snapshot.
-  const keys = Object.keys(files).filter((k) => !k.startsWith(".")).sort();
-  return `${entrypoint}:${keys.length}:${keys.slice(0, 8).join(",")}`;
+/** Hash fort du snapshot (clé du journal de divergence, doc 12 §6) :
+ *  contenu exact + versions tscircuit/checks. Deux contenus différents ne
+ *  partagent jamais un compteur (quarantaine = 3 hashes distincts). */
+export function sequenceHash(files: Record<string, string>, entrypoint: string): string {
+  const h = createHash("sha256");
+  h.update(`entry:${entrypoint}\n`);
+  h.update(
+    `tscircuit:${TSCIRCUIT_VERSIONS.tscircuit}|core:${TSCIRCUIT_VERSIONS.core}|eval:${TSCIRCUIT_VERSIONS.eval}|checks:${TSCIRCUIT_VERSIONS.checks}\n`
+  );
+  for (const k of Object.keys(files).sort()) {
+    if (k.startsWith(".")) continue; // fichiers réservés hors circuit
+    h.update(`--- ${k} ---\n`);
+    h.update(files[k]);
+    h.update("\n");
+  }
+  return h.digest("hex").slice(0, 32);
 }
 
 function normalizeLcsc(l: string): string {
@@ -135,7 +147,7 @@ export async function assertSequenceForValidation(files: Record<string, string>)
     seqErr("evaluation_failed", `Évaluation serveur impossible : ${message} — corrigez puis relancez.`, 502);
   }
   const { reports, allPass } = await runAllGates(summary!, circuitJson!, {
-    hash: hashFilesForLog(files, entrypoint),
+    hash: sequenceHash(files, entrypoint),
     divergenceDir: gatesCacheDir(),
   });
   const sourcing = checkSourcingTraceability(files);

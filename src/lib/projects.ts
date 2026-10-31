@@ -691,6 +691,15 @@ export function toApiError(e: unknown): Response {
   return Response.json({ error: { code, message } }, { status });
 }
 
+/** Lit un corps JSON sans dupliquer le try/catch dans chaque route. */
+export async function readJsonBody<T>(req: Request): Promise<T> {
+  try {
+    return (await req.json()) as T;
+  } catch {
+    err("invalid_json", "Corps JSON invalide.");
+  }
+}
+
 export async function getAssemblyMode(id: string): Promise<AssemblyMode> {
   if (storageBackend() === "postgres") {
     await initSchema();

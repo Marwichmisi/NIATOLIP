@@ -22,7 +22,7 @@ Base relationnelle (Postgres cible ; SQLite acceptable en prototype local). Les 
 | `messages` | `id`, `conversation_id`, `role`, `ui_message_json`, `created_at` | Format `UIMessage` AI SDK sérialisé tel quel |
 | `runs` | `id`, `project_id`, `conversation_id`, `model_choice`, `model_id`, `status` (running/waiting_approval/completed/failed/cancelled/budget_exceeded), `steps_used`, `tokens_in`, `tokens_out`, `cost_estimate`, `started_at`, `ended_at`, `stop_reason` | Supporte NFR-05/NFR-06 |
 | `run_steps` | `id`, `run_id`, `step_no`, `tool_name`, `input_json` (tronqué), `output_summary_json`, `status`, `duration_ms`, `created_at` | Alimente le fil d'exécution UX ; pas de secrets ni de contenus complets |
-| `approvals` | `id`, `run_id`, `gate` (H1/H2/export), `payload_json`, `decision` (approved/rejected), `decided_at` | |
+| `approvals` | `id`, `project_id`, `gate` (H1/H2), `approved`, `job_id?`, `reason?`, `created_at` | **P0-3 (issue #14)** : vérité serveur H1/H2 — l'outil agent enregistre sur approbation explicite, l'export validé exige une H2 postérieure au job |
 | `validation_jobs` | `id`, `project_id`, `version_id`, `status`, `kicad_version`, `tscircuit_version`, `erc_report_json`, `drc_report_json`, `created_at`, `finished_at` | Jobs du worker (G4/G5) |
 | `artifacts` | `id`, `project_id`, `version_id`, `job_id?`, `kind` (gerber/bom/pnp/kicad/sources/report), `storage_key`, `sha256`, `created_at` | Téléchargement via URL signée ou route authentifiée |
 | `component_cache` | `lcsc_id`, `mpn`, `description`, `package`, `stock`, `price`, `is_basic`, `footprint_hint`, `fetched_at` | Cache jlcsearch avec TTL court (stock volatile : 15 min par défaut, revérifié en G5) |
@@ -45,7 +45,7 @@ Base relationnelle (Postgres cible ; SQLite acceptable en prototype local). Les 
 | `/api/projects/:id/versions` | GET / POST | Liste des versions ; création d'un point de restauration |
 | `/api/projects/:id/versions/:vid/restore` | POST | Restauration |
 | `/api/projects/:id/validate` | POST | Crée un `validation_job` (worker KiCad) pour une version — **P0-3** : `g0g3` recalculé serveur, `409 gates_not_green` si rouge (ni version ni job créés) |
-| `/api/projects/:id/approvals` | GET / POST | **P0-3** : vérité serveur H1/H2/export (`{ gate, approved, jobId?, reason? }`) — l'export validé exige une H2 postérieure au job |
+| `/api/projects/:id/approvals` | GET / POST | **P0-3** : vérité serveur H1/H2 (`{ gate: H1|H2, approved, jobId?, reason? }`) — l'export validé exige une H2 postérieure au job |
 | `/api/validation-jobs/:id` | GET | Statut + rapports ERC/DRC |
 | `/api/projects/:id/export` | POST | Génère le pack fabrication (après H2) ; renvoie les artefacts |
 | `/api/artifacts/:id/download` | GET | Téléchargement authentifié d'un artefact |

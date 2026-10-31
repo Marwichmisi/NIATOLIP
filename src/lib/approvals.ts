@@ -1,9 +1,11 @@
-// Approbations H1/H2/export — vérité serveur (P0-3, issue #14).
+// Approbations H1/H2 — vérité serveur (P0-3, issue #14).
 // Le flux agent utilise AI SDK `toolApproval: user-approval` : `execute` ne
 // tourne que sur approbation explicite, donc l'enregistrement dans l'outil
-// (requestFinalApproval) est déjà une preuve serveur. Cette table la rend
-// vérifiable par les routes d'export sans faire confiance à l'historique
-// UIMessage client (spoofable via POST /messages au prototype mono-user).
+// (requestFinalApproval / requestPlanApproval) est déjà une preuve serveur.
+// Cette table la rend vérifiable par les routes d'export sans faire confiance
+// à l'historique UIMessage client (spoofable via POST /messages au prototype
+// mono-user). Écriture unique : l'outil agent. La route POST /approvals
+// n'existe que pour les flows manuels/tests.
 // Serveur uniquement.
 if (typeof window !== "undefined") {
   throw new Error("src/lib/approvals.ts est serveur uniquement.");
@@ -14,7 +16,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getPool, initSchema, isPgConfigured } from "@/lib/db";
 
-export type ApprovalGate = "H1" | "H2" | "export";
+export type ApprovalGate = "H1" | "H2";
 
 export interface ApprovalRecord {
   id: string;
@@ -22,7 +24,6 @@ export interface ApprovalRecord {
   gate: ApprovalGate;
   approved: boolean;
   jobId: string | null;
-  versionNo: number | null;
   reason: string | null;
   created_at: string;
 }
@@ -31,7 +32,6 @@ export interface RecordApprovalInput {
   gate: ApprovalGate;
   approved: boolean;
   jobId?: string | null;
-  versionNo?: number | null;
   reason?: string | null;
 }
 
@@ -70,6 +70,19 @@ async function fileWriteDoc(doc: FileApprovalsDoc): Promise<void> {
   await rename(tmp, p);
 }
 
+// Sérialise les read-modify-write du backend fichiers (même process).
+// tmp+rename protège le lecteur, pas deux écrivains concurrents (doc 15 §6.2).
+let fileQueue: Promise<void> = Promise.resolve();
+
+function fileMutex<T>(fn: () => Promise<T>): Promise<T> {
+  const run = fileQueue.then(fn, fn);
+  fileQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 function toRecord(row: Record<string, unknown>): ApprovalRecord {
   return {
     id: String(row.id),
@@ -77,16 +90,14 @@ function toRecord(row: Record<string, unknown>): ApprovalRecord {
     gate: row.gate as ApprovalGate,
     approved: Boolean(row.approved),
     jobId: (row.job_id as string | null) ?? (row.jobId as string | null) ?? null,
-    versionNo:
-      (row.version_no as number | null) ?? (row.versionNo as number | null) ?? null,
     reason: (row.reason as string | null) ?? null,
     created_at: new Date(row.created_at as string).toISOString(),
   };
 }
 
 function validateInput(input: RecordApprovalInput): void {
-  if (input.gate !== "H1" && input.gate !== "H2" && input.gate !== "export") {
-    err("invalid_gate", "Gate invalide (H1 | H2 | export).");
+  if (input.gate !== "H1" && input.gate !== "H2") {
+    err("invalid_gate", "Gate invalide (H1 | H2).");
   }
   if (typeof input.approved !== "boolean") err("invalid_approval", "approved doit être un booléen.");
   if (input.jobId !== undefined && input.jobId !== null) {
@@ -112,22 +123,23 @@ export async function recordApproval(
     gate: input.gate,
     approved: input.approved,
     jobId: input.jobId ?? null,
-    versionNo: input.versionNo ?? null,
     reason: typeof input.reason === "string" ? input.reason.slice(0, 2000) : null,
     created_at: new Date().toISOString(),
   };
   if (isPgConfigured()) {
     await initSchema();
     await getPool().query(
-      "insert into approvals(id, project_id, gate, approved, job_id, version_no, reason) values($1,$2,$3,$4,$5,$6,$7)",
-      [rec.id, rec.projectId, rec.gate, rec.approved, rec.jobId, rec.versionNo, rec.reason]
+      "insert into approvals(id, project_id, gate, approved, job_id, reason) values($1,$2,$3,$4,$5,$6)",
+      [rec.id, rec.projectId, rec.gate, rec.approved, rec.jobId, rec.reason]
     );
     return rec;
   }
-  const doc = await fileReadDoc();
-  doc.approvals.push(rec);
-  await fileWriteDoc(doc);
-  return rec;
+  return fileMutex(async () => {
+    const doc = await fileReadDoc();
+    doc.approvals.push(rec);
+    await fileWriteDoc(doc);
+    return rec;
+  });
 }
 
 /** Historique des décisions d'un projet (plus récent d'abord, borné). */
