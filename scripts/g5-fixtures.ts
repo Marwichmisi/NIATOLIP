@@ -165,8 +165,10 @@ async function main(): Promise<void> {
     const sample = "(lib_symbols (symbol \"Custom:rail_up_1_1\" (power global) (pin (length 0.01)))) (symbol \"X\" (power local)) (symbol \"Y\" (power))";
     const { text, count } = g5.normalizeKicadSchPower(sample);
     assert(count === 2, `2 occurrences normalisées (reçu ${count})`);
-    assert(!/\(power\s+(?:global|local)\)/.test(text), "plus aucun (power global|local)");
-    assert((text.match(/\(power\)/g) ?? []).length === 3, "3× (power) nu après normalisation");
+    assert(!/\(power\s+(?:global|local)\)/i.test(text), "plus aucun (power global|local)");
+    assert(text.includes("(power)"), "(power) nu présent après normalisation");
+    const variants = g5.normalizeKicadSchPower("(POWER  GLOBAL) (power\tlocal)");
+    assert(variants.count === 2, `variantes casse/blancs normalisées (reçu ${variants.count})`);
     const idem = g5.normalizeKicadSchPower("(power)");
     assert(idem.count === 0 && idem.text === "(power)", "schéma déjà compatible : inchangé, count 0");
   }

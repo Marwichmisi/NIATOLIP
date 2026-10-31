@@ -1,9 +1,9 @@
 // Fixture E2E G5 — carte minimale 100 % CMS, SANS nets nommés, SANS vias attendus.
 // Historique P0-6 #28 : ce board servait de board d'évitement tant que le
-// convertisseur émettait `(power global)` (rejeté par kicad-cli 9.0.9, exit 3 —
-// à tort attribué aux « pins 0,01 mm »). Depuis la normalisation worker
-// `(power global|local)` → `(power)`, la preuve E2E porte sur le Graetz à nets
-// nommés (scripts/g5-e2e.ts). Cette carte reste un smoke-test pipeline G5.
+// convertisseur émettait `(power global)` (rejeté par kicad-cli 9.0.9 —
+// rationnel dans `normalizeKicadSchPower`, worker/src/g5.js). Depuis la
+// normalisation worker, la preuve E2E porte sur le Graetz à nets nommés
+// (scripts/g5-e2e.ts). Cette carte reste un smoke-test pipeline G5.
 circuit.add(
   <board width="20mm" height="20mm" layers={2}>
     <resistor

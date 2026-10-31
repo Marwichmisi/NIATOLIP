@@ -470,8 +470,7 @@ async function processJob(job) {
   const schPath = join(workdir, "project.kicad_sch");
   const pcbPath = join(workdir, "project.kicad_pcb");
   // P0-6 #28 : normalisation `(power global|local)` → `(power)` pour kicad-cli
-  // 9.0.9 (le format v10 est rejeté avec `Failed to load schematic`, exit 3).
-  // Les pins rail à 0,01 mm sont innocentes (symboles natifs à `length 0`).
+  // 9.0.9 — voir le rationnel complet dans `normalizeKicadSchPower` (g5.js).
   const rawSch = schConv.getOutputString();
   const { text: normalizedSch, count: powerNormalized } = normalizeKicadSchPower(rawSch);
   await writeFile(schPath, normalizedSch);
@@ -510,10 +509,8 @@ async function processJob(job) {
 
   const warnings = [];
   if (powerNormalized > 0) warnings.push(`Schéma KiCad normalisé pour KiCad 9 : ${powerNormalized} occurrence(s) \`(power global|local)\` → \`(power)\` (P0-6 #28, convertisseur circuit-json-to-kicad ${CONVERTER_KICAD_VERSION}).`);
-  // Tri hole_clearance (P0-6 #28) : `hole_clearance` < 0,2 mm reste une ERREUR
-  // bloquante G4 — c'est la spec JLCPCB publique « Via hole to Track : 0,2 mm »
-  // (pas un artefact du convertisseur, pas un warning fabricant). Cause probée :
-  // marge obstacle 0,15 du solveur < 0,2 requis ; aucune décote ici.
+  // Tri hole_clearance (P0-6 #28, rationnel : docs/05 §3) : `hole_clearance`
+  // < 0,2 mm reste une ERREUR bloquante G4 — aucune décote ici.
   if (ercParsed.summary.unparsed || drcParsed.summary.unparsed) warnings.push("Schéma JSON kicad-cli inattendu : violations traitées comme bloquantes (strict).");
 
   // Artefacts toujours produits : sources + rapport (même en G4 rouge, sans exports finaux).

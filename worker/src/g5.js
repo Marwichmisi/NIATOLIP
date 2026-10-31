@@ -12,14 +12,16 @@ export const JLC_SPECS_COMMIT = "020e767d0c08794dec5eed2fa8635244c800599a";
  * n'existe que depuis le format v10 : `kicad-cli 9.0.9` le rejette
  * (`Failed to load schematic`, exit 3) alors que `(power)` nu charge.
  * La longueur des pins (0,01 mm) est INNOCENTE — les power symbols natifs
- * KiCad utilisent `length 0` (doc : eeschema_symbols_and_libraries.adoc).
- * Remplace `(power global|local)` par `(power)` (minuscules strictes, telles
- * qu'émises par le convertisseur). Pure, testée par `npm run g5:fixtures`.
+ * KiCad utilisent `length 0`
+ * (https://gitlab.com/kicad/services/kicad-doc/-/blob/master/src/eeschema/eeschema_symbols_and_libraries.adoc).
+ * Remplace `(power global|local)` par `(power)` — insensible à la casse et aux
+ * blancs (`\s+` couvre espaces/newlines), car tout token v10 résiduel refait
+ * échouer le chargement en 9.0.9. Pure, testée par `npm run g5:fixtures`.
  */
 export function normalizeKicadSchPower(sch) {
   if (typeof sch !== "string") return { text: sch, count: 0 };
   let count = 0;
-  const text = sch.replace(/\(power\s+(?:global|local)\)/g, (m) => {
+  const text = sch.replace(/\(power\s+(?:global|local)\)/gi, () => {
     count++;
     return "(power)";
   });

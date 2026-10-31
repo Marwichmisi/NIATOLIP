@@ -58,19 +58,20 @@ snapshot des fichiers (version N)
 
 Versions KiCad et tscircuit du worker épinglées dans l'image et inscrites dans le rapport. Toute violation DRC « warning » est listée dans le rapport ; seuls les bloquants (erreurs, nets non connectés) empêchent G4, mais les warnings sont visibles en H2.
 
-> **Fix G4 P0-6 #28 (2026-10-31, vérifié par repro locale)** : la cause du refus
-> ERC n'était PAS les pins rail à 0,01 mm (les power symbols natifs KiCad
-> utilisent `length 0`) mais le token `(power global|local)` émis par
-> `circuit-json-to-kicad` (`SymbolPower("global")` sur `Custom:rail_up/down`) :
-> format v10 rejeté par `kicad-cli 9.0.9` (« Failed to load schematic », exit 3).
-> Le worker normalise désormais `(power global|local)` → `(power)` avant ERC
-> (`normalizeKicadSchPower`, `worker/src/g5.js`, warning tracé dans le rapport).
+> **Fix G4 P0-6 #28 (2026-10-31, vérifié par repro locale sous image
+> `kicad/kicad:9.0`)** : le refus ERC n'était PAS les pins rail à 0,01 mm
+> (les power symbols natifs KiCad utilisent `length 0`) mais le token
+> `(power global|local)` émis par `circuit-json-to-kicad`
+> (`SymbolPower("global")` sur `Custom:rail_up/down`) : format v10 rejeté par
+> `kicad-cli 9.0.9` (« Failed to load schematic », exit 3). Rationnel complet
+> dans `normalizeKicadSchPower` (`worker/src/g5.js`) ; le worker normalise en
+> `(power)` avant ERC (occurrence tracée en warning dans le rapport).
 > Tri `hole_clearance` : les violations 0,16–0,19 mm vs règle 0,2 mm restent des
 > ERREURS bloquantes G4 — c'est la spec JLCPCB publique « Via hole to Track :
-> 0,2 mm » (ni artefact convertisseur, ni warning fabricant ; la surcharge via
-> < 0,3 mm reste elle un warning `fabricator-drc`). Cause probable côté
-> solveur (marge obstacle 0,15 < 0,2 requis) : à corriger upstream, jamais en
-> décotant le DRC ici.
+> 0,2 mm » (https://jlcpcb.com/capabilities/pcb-capabilities), ni artefact
+> convertisseur ni warning fabricant (la surcharge via < 0,3 mm reste elle un
+> warning `fabricator-drc`). Cause probable côté solveur (marge obstacle 0,15
+> < 0,2 requis) : à corriger upstream, jamais en décotant le DRC ici.
 
 ## 4. Pack fabrication (livrable utilisateur)
 

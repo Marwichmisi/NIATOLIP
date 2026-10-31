@@ -4,8 +4,8 @@
 // Crée un projet, pousse main.tsx + parts.json, lance POST validate, poll
 // jusqu'à done, contrôle G4 vert + G5-PCB/G5-PCBA jugées.
 // Historique : le board minimal sans rails (fixtures/g5-e2e/minimal.tsx) servait
-// de board d'évitement tant que `(power global)` du convertisseur faisait
-// échouer tout ERC kicad-cli 9.0.9 (exit 3) — normalisation worker P0-6 #28.
+// de board d'évitement tant que `(power global)` faisait échouer l'ERC
+// kicad-cli 9.0.9 (rationnel : `normalizeKicadSchPower`, worker/src/g5.js).
 // Le Graetz prouve désormais le pipeline G4/G5 sur design réel (VRECT/VCC/GND).
 import { readFile } from "node:fs/promises";
 
@@ -22,8 +22,10 @@ async function main(): Promise<void> {
   // Board représentatif P0-6 : Graetz à nets nommés (VRECT/VCC/GND) — les rails
   // `Custom:rail_up/down` du convertisseur sont normalisés `(power)` côté worker.
   const code = await readFile(new URL("../fixtures/gates/healthy-graetz.tsx", import.meta.url), "utf8");
-  // BOM de preuve : refs du Graetz ; LCSC plausibles (stock inconnu = warning
-  // G5-PCBA, jamais bloquant ; rupture confirmée = erreur).
+  // BOM de preuve : refs du Graetz ; LCSC/MPN NON VÉRIFIÉS (valeurs plausibles
+  // pour smoke-test uniquement — jamais réutiliser comme sourcing réel, qui
+  // exige searchComponents + getComponentDetails). Stock inconnu = warning
+  // G5-PCBA, jamais bloquant ; rupture confirmée = erreur.
   const parts = [
     { ref: "BR1", lcsc: "C4004", mpn: "DB107", role: "Pont redresseur Graetz" },
     { ref: "C1", lcsc: "C1525", mpn: "CL05B104KO5NNNC", role: "Découplage 100 nF" },
