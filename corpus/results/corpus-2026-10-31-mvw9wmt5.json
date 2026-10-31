@@ -1,0 +1,238 @@
+{
+  "date": "2026-10-31T10:43:39.257Z",
+  "promptVersion": "1.4 — issue #8 (templates T1–T3)",
+  "modelChoice": "meta-spark",
+  "modelId": "muse-spark-1.3",
+  "tscircuit": {
+    "tscircuit": "0.0.3036",
+    "core": "0.0.2230",
+    "eval": "0.0.1668",
+    "checks": "0.0.265",
+    "runframe": "0.0.3087"
+  },
+  "maxSteps": 50,
+  "maxCostUsd": 2,
+  "cardsMeta": [
+    {
+      "id": "R1",
+      "difficulty": "medium",
+      "topics": [
+        "mcu",
+        "i2c",
+        "sensor",
+        "usb-c",
+        "power"
+      ]
+    },
+    {
+      "id": "R2",
+      "difficulty": "medium",
+      "topics": [
+        "mcu",
+        "spi-flash",
+        "usb-c",
+        "button",
+        "clock"
+      ]
+    },
+    {
+      "id": "R3",
+      "difficulty": "easy",
+      "topics": [
+        "mcu",
+        "i2c",
+        "connector",
+        "battery",
+        "power"
+      ]
+    },
+    {
+      "id": "R4",
+      "difficulty": "hard",
+      "topics": [
+        "uart",
+        "power",
+        "relay",
+        "connector",
+        "analog"
+      ]
+    },
+    {
+      "id": "R5",
+      "difficulty": "medium",
+      "topics": [
+        "mcu",
+        "spi",
+        "display",
+        "button",
+        "usb-c"
+      ]
+    }
+  ],
+  "threshold": "4/5",
+  "greens": 5,
+  "tested": 5,
+  "pass": true,
+  "cards": [
+    {
+      "id": "R1",
+      "title": "ESP32-C3 + BME280 (I2C) + USB-C + LED",
+      "projectId": "f7e07102-e444-43d3-a92f-69b7cb812414",
+      "green": true,
+      "gates": [
+        {
+          "gate": "G0",
+          "status": "pass"
+        },
+        {
+          "gate": "G1",
+          "status": "pass"
+        },
+        {
+          "gate": "G2",
+          "status": "pass"
+        },
+        {
+          "gate": "G3",
+          "status": "pass"
+        }
+      ],
+      "gateErrors": [],
+      "steps": 27,
+      "toolCalls": 50,
+      "latencyMs": 206568,
+      "inputTokens": 671146,
+      "outputTokens": 23402,
+      "costUsd": 0.938391,
+      "snapshots": 2
+    },
+    {
+      "id": "R2",
+      "title": "RP2040 + flash + USB-C + boutons",
+      "projectId": "04bfddbc-8bd9-4e0e-8022-c3db7dd22b54",
+      "green": true,
+      "gates": [
+        {
+          "gate": "G0",
+          "status": "pass"
+        },
+        {
+          "gate": "G1",
+          "status": "pass"
+        },
+        {
+          "gate": "G2",
+          "status": "pass"
+        },
+        {
+          "gate": "G3",
+          "status": "pass"
+        }
+      ],
+      "gateErrors": [],
+      "steps": 23,
+      "toolCalls": 42,
+      "latencyMs": 151889,
+      "inputTokens": 475836,
+      "outputTokens": 21574,
+      "costUsd": 0.6864844999999999,
+      "snapshots": 3
+    },
+    {
+      "id": "R3",
+      "title": "Nœud capteur ESP32-C3 + I2C externe + JST batterie",
+      "projectId": "e53961b9-623c-40ff-a674-f6add6e09c05",
+      "green": true,
+      "gates": [
+        {
+          "gate": "G0",
+          "status": "pass"
+        },
+        {
+          "gate": "G1",
+          "status": "pass"
+        },
+        {
+          "gate": "G2",
+          "status": "pass"
+        },
+        {
+          "gate": "G3",
+          "status": "pass"
+        }
+      ],
+      "gateErrors": [],
+      "steps": 27,
+      "toolCalls": 49,
+      "latencyMs": 153033,
+      "inputTokens": 642550,
+      "outputTokens": 19263,
+      "costUsd": 0.8850552500000001,
+      "snapshots": 3
+    },
+    {
+      "id": "R4",
+      "title": "Carte relais pilotée en UART via connecteur externe",
+      "projectId": "8bd9b4b7-5a18-4f6b-9e2d-2dd3ce0986d8",
+      "green": true,
+      "gates": [
+        {
+          "gate": "G0",
+          "status": "pass"
+        },
+        {
+          "gate": "G1",
+          "status": "pass"
+        },
+        {
+          "gate": "G2",
+          "status": "pass"
+        },
+        {
+          "gate": "G3",
+          "status": "pass"
+        }
+      ],
+      "gateErrors": [],
+      "steps": 29,
+      "toolCalls": 50,
+      "latencyMs": 255750,
+      "inputTokens": 719140,
+      "outputTokens": 38807,
+      "costUsd": 1.06385475,
+      "snapshots": 3
+    },
+    {
+      "id": "R5",
+      "title": "MCU + connecteur écran SPI + boutons",
+      "projectId": "a7e41925-3e28-4c6f-839a-cb007b91fbe0",
+      "green": true,
+      "gates": [
+        {
+          "gate": "G0",
+          "status": "pass"
+        },
+        {
+          "gate": "G1",
+          "status": "pass"
+        },
+        {
+          "gate": "G2",
+          "status": "pass"
+        },
+        {
+          "gate": "G3",
+          "status": "pass"
+        }
+      ],
+      "gateErrors": [],
+      "steps": 32,
+      "toolCalls": 54,
+      "latencyMs": 233843,
+      "inputTokens": 885419,
+      "outputTokens": 38092,
+      "costUsd": 1.26866475,
+      "snapshots": 3
+    }
+  ]
+}

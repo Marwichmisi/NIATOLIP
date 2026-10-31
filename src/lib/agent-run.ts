@@ -185,6 +185,26 @@ async function evalDiskSet(
     if (raw.length > 2_000_000) return;
     await mkdir(evalCacheDir(), { recursive: true });
     await writeFsFile(join(evalCacheDir(), `${hash}.json`), raw, "utf8");
+    // P0-4 : purge passive du vieux cache (best-effort, jamais bloquante) —
+    // l'invalidation de version est assurée par le hash, mais on évite
+    // l'accumulation : cap à 500 fichiers, TTL 30 jours.
+    try {
+      const { readdir, stat, unlink } = await import("node:fs/promises");
+      const files = (await readdir(evalCacheDir())).filter((f) => f.endsWith(".json")).sort();
+      const now = Date.now();
+      for (const f of files) {
+        try {
+          const st = await stat(join(evalCacheDir(), f));
+          if (now - st.mtimeMs > 30 * 24 * 3600 * 1000) await unlink(join(evalCacheDir(), f));
+        } catch { /* best-effort */ }
+      }
+      const rest = (await readdir(evalCacheDir())).filter((f) => f.endsWith(".json")).sort();
+      for (const f of rest.slice(0, Math.max(0, rest.length - 500))) {
+        try { await unlink(join(evalCacheDir(), f)); } catch { /* best-effort */ }
+      }
+    } catch {
+      // Purge best-effort : jamais bloquante.
+    }
   } catch {
     // Cache best-effort : jamais bloquant.
   }

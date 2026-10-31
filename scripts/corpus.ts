@@ -65,21 +65,37 @@ function maxSteps(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 50) : 50;
 }
 
+/** Plafond coût par carte (P1-1) : même défaut que le chat produit (2 USD). */
+function maxCostUsd(args: string[]): number | null {
+  if (args.includes("--no-budget")) return null;
+  const idx = args.indexOf("--budget");
+  if (idx >= 0 && args[idx + 1] !== undefined) {
+    const raw = Number(args[idx + 1]);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    console.error(`--budget attend un montant USD > 0 (reçu : ${args[idx + 1]}).`);
+    process.exit(2);
+  }
+  const raw = Number(process.env.AGENT_RUN_BUDGET_USD ?? "2");
+  return Number.isFinite(raw) && raw > 0 ? raw : 2;
+}
+
 function resolveEntrypoint(files: Record<string, string>): string {
+  // Aligné sur src/lib/sequence.ts (P3-1 : main.tsx → index.tsx → alphabétique).
   if (typeof files["main.tsx"] === "string") return "main.tsx";
+  if (typeof files["index.tsx"] === "string") return "index.tsx";
   const first = Object.keys(files).filter((p) => p.endsWith(".tsx")).sort()[0];
   if (!first) throw new Error("Aucun fichier .tsx généré par l'agent.");
   return first;
 }
 
-async function runCard(card: CorpusCard, choice: ModelChoice): Promise<CardResult> {
+async function runCard(card: CorpusCard, choice: ModelChoice, costCap: number | null): Promise<CardResult> {
   const stamp = new Date().toISOString().slice(0, 10);
   const project = await createProject(`corpus-${card.id}-${stamp}`);
   // Vérifie la création (FS sandbox parfois lent) : échec rapide et parlant
   // plutôt qu'un run fantôme si le projet n'est pas relisible.
   await getProject(project.id);
   try {
-    return await runCardInner(card, choice, project.id);
+    return await runCardInner(card, choice, project.id, costCap);
   } catch (err) {
     (err as { projectId?: string }).projectId = project.id;
     throw err;
@@ -89,11 +105,13 @@ async function runCard(card: CorpusCard, choice: ModelChoice): Promise<CardResul
 async function runCardInner(
   card: CorpusCard,
   choice: ModelChoice,
-  projectId: string
+  projectId: string,
+  costCap: number | null
 ): Promise<CardResult> {
   const state = new AgentRunState();
   const tools = createAgentTools({ projectId, clientBoard: null }, state) as ToolSet;
   const started = Date.now();
+  let costSoFar = 0;
   const result = await withMeta429Retry(() =>
     generateText({
       model: getModel(choice),
@@ -101,7 +119,17 @@ async function runCardInner(
       prompt: card.prompt,
       tools,
       toolChoice: META_TOOL_CHOICE,
-      stopWhen: isStepCount(maxSteps()),
+      stopWhen: costCap === null ? [isStepCount(maxSteps())] : [isStepCount(maxSteps()), () => costSoFar >= costCap],
+      onStepFinish: ({ usage }) => {
+        if (costCap === null) return;
+        const u = usage as { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number };
+        const stepCost = estimateCost(choice, {
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          cachedInputTokens: u.cachedInputTokens,
+        });
+        if (Number.isFinite(stepCost)) costSoFar += stepCost;
+      },
     })
   );
   const latencyMs = Date.now() - started;
@@ -173,6 +201,21 @@ function dryRun(): void {
     TSCIRCUIT_VERSIONS.tscircuit.length > 0 && TSCIRCUIT_VERSIONS.eval.length > 0,
   ]);
   checks.push(["prompt agent versionné", AGENT_PROMPT_VERSION.length > 0]);
+  checks.push([
+    "labels difficulté/sujet (benchmark)",
+    CORPUS_CARDS.every(
+      (c) => ["easy", "medium", "hard"].includes(c.difficulty) && c.topics.length >= 3
+    ),
+  ]);
+  checks.push([
+    "plafond coût valide (défaut 2 USD)",
+    (() => {
+      const raw = process.env.AGENT_RUN_BUDGET_USD;
+      if (raw === undefined || raw.trim() === "") return true;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0;
+    })(),
+  ]);
   const failed = checks.filter(([, ok]) => !ok);
   for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
   if (failed.length > 0) {
@@ -204,7 +247,8 @@ function printTable(results: CardResult[]): void {
 async function writeReport(
   results: CardResult[],
   choice: ModelChoice,
-  stamp: string
+  stamp: string,
+  costCap: number | null
 ): Promise<string> {
   const catalog = getModelCatalog();
   const greens = results.filter((r) => !r.skipped && r.green).length;
@@ -217,6 +261,8 @@ async function writeReport(
     modelId: catalog[choice].modelId,
     tscircuit: { ...TSCIRCUIT_VERSIONS },
     maxSteps: maxSteps(),
+    maxCostUsd: costCap,
+    cardsMeta: CORPUS_CARDS.map((c) => ({ id: c.id, difficulty: c.difficulty, topics: c.topics })),
     threshold: `${CORPUS_GREEN_THRESHOLD}/5`,
     greens,
     tested,
@@ -240,7 +286,9 @@ async function writeDocs(results: CardResult[], choice: ModelChoice, stamp: stri
   const row =
     `| ${stamp} | ${choice} (${catalog[choice].modelId}) | ${AGENT_PROMPT_VERSION.split(" ")[0]} ` +
     `| tscircuit ${TSCIRCUIT_VERSIONS.tscircuit} | ${cell("R1")} | ${cell("R2")} | ${cell("R3")} | ${cell("R4")} | ${cell("R5")} ` +
-    `| ${greens}/5 | ${greens >= CORPUS_GREEN_THRESHOLD ? "✅ porte M1" : "❌ < 4/5"} |`;
+    `| ${greens}/5 | ${greens >= CORPUS_GREEN_THRESHOLD ? "✅ porte M1" : "❌ < 4/5"} ` +
+    `| $${results.filter((r) => !r.skipped).reduce((s, r) => s + (Number.isFinite(r.costUsd) ? r.costUsd : 0), 0).toFixed(2)} ` +
+    `| ${Math.round(Math.max(0, ...results.map((r) => r.latencyMs ?? 0)) / 1000)}s |`;
   const raw = await readFile(DOC_PATH, "utf8");
   if (!raw.includes("<!-- HISTORY-START -->")) {
     throw new Error("Marqueur <!-- HISTORY-START --> introuvable dans docs/13-CORPUS-R1-R5.md.");
@@ -272,16 +320,18 @@ async function main(): Promise<void> {
 
   const cards = only ? CORPUS_CARDS.filter((c) => c.id === only) : CORPUS_CARDS;
   const stamp = new Date().toISOString().slice(0, 10);
+  const costCap = maxCostUsd(args);
   console.log(
     `\n▶ Corpus R1–R5 (${cards.map((c) => c.id).join(", ")}) sur ${choice} (${getModelCatalog()[choice].modelId}), ` +
-      `prompt ${AGENT_PROMPT_VERSION}, tscircuit ${TSCIRCUIT_VERSIONS.tscircuit}, max ${maxSteps()} étapes/carte.`
+      `prompt ${AGENT_PROMPT_VERSION}, tscircuit ${TSCIRCUIT_VERSIONS.tscircuit}, max ${maxSteps()} étapes/carte, ` +
+      `plafond ${costCap === null ? "désactivé (--no-budget)" : `$${costCap}/carte`} (stopWhen coût, ≤1 étape de dépassement).`
   );
   console.log("H1/H2 auto-approuvées dans le harnais (pas d'humain) — seuls les verdicts G0–G3 comptent.");
   const results: CardResult[] = [];
   for (const card of cards) {
     console.log(`\n▶ ${card.id} — ${card.title}…`);
     try {
-      const r = await runCard(card, choice);
+      const r = await runCard(card, choice, costCap);
       console.log(`  ${r.green ? "✅ G3 vert" : "❌ échec"} — ${r.steps} étapes, ${r.toolCalls} appels, $${r.costUsd.toFixed(4)}`);
       results.push(r);
     } catch (err) {
@@ -309,7 +359,7 @@ async function main(): Promise<void> {
     }
   }
   printTable(results);
-  const file = await writeReport(results, choice, `${stamp}-${Date.now().toString(36)}`);
+  const file = await writeReport(results, choice, `${stamp}-${Date.now().toString(36)}`, costCap);
   console.log(`\nRapport JSON : ${file}`);
   if (args.includes("--write-docs")) await writeDocs(results, choice, stamp);
 

@@ -401,11 +401,13 @@ export interface QuarantineRuleState {
 }
 
 export interface QuarantineStore {
+  /** Version des checks ayant produit ce store — un bump invalide l'historique (P0-4). */
+  checksVersion: string;
   rules: Record<string, QuarantineRuleState>;
 }
 
 export function emptyQuarantineStore(): QuarantineStore {
-  return { rules: {} };
+  return { checksVersion: CHECKS_VERSION, rules: {} };
 }
 
 /** Seuil de quarantaine (doc 12 §6.2) : 3 divergences sur la même règle. */
@@ -449,6 +451,12 @@ export async function loadQuarantineStore(dir: string): Promise<QuarantineStore>
     if (!parsed || typeof parsed !== "object" || typeof parsed.rules !== "object" || parsed.rules === null) {
       return emptyQuarantineStore();
     }
+    // P0-4 : un bump de @tscircuit/checks invalide l'historique quarantiné —
+    // une règle quarantinée sous N ne reste jamais déclassée sous N+1 sans
+    // nouvelle divergence constatée sur la nouvelle version.
+    if (parsed.checksVersion !== CHECKS_VERSION) {
+      return emptyQuarantineStore();
+    }
     return parsed;
   } catch {
     return emptyQuarantineStore();
@@ -467,6 +475,7 @@ export async function recordGateDivergences(
   opts: { dir: string; hash?: string }
 ): Promise<{ newlyQuarantined: string[]; store: QuarantineStore }> {
   const store = await loadQuarantineStore(opts.dir);
+  store.checksVersion = CHECKS_VERSION;
   const newlyQuarantined: string[] = [];
   if (divergences.length === 0) return { newlyQuarantined, store };
   try {

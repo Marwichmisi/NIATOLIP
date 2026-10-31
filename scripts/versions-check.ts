@@ -73,6 +73,13 @@ async function main(): Promise<void> {
   const g5Sha = /JLC_SPECS_COMMIT = "([0-9a-f]+)"/.exec(g5src)?.[1];
   check(!!rootSha && rootSha === workerSha, `specs commit racine == worker (${workerSha})`);
   check(!!g5Sha && workerSha?.startsWith(g5Sha) === true, `JLC_SPECS_COMMIT == specs worker (${g5Sha})`);
+  // 4. P0-4 : la quarantaine est versionnée par les checks (un bump invalide
+  // l'historique — jamais de déclassement persistant sous N+1).
+  const gatesSrc = readFileSync(join(process.cwd(), "src", "lib", "agent-gates.ts"), "utf8");
+  check(
+    gatesSrc.includes("checksVersion: string") && gatesSrc.includes("parsed.checksVersion !== CHECKS_VERSION"),
+    "quarantaine versionnée par CHECKS_VERSION (invalidation au bump)"
+  );
 
   if (failures.length > 0) {
     console.log(`\n${failures.length} épinglage(s) désynchronisé(s).`);

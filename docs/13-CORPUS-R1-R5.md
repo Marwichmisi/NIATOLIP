@@ -37,11 +37,14 @@ Prompts canoniques complets : `src/lib/corpus.ts` (`CORPUS_CARDS`).
 
 ## 4. Historique des exécutions
 
+> **P1-1 (issue #15)** : harnais avec plafond coût aligné chat (`AGENT_RUN_BUDGET_USD`, défaut 2 USD/carte, `--no-budget`/`--budget` pour outrepasser), `resolveEntrypoint` aligné sur `sequence.ts`, labels `difficulty`/`topics` façon benchmark officiel gelés dans `src/lib/corpus.ts`, `maxCostUsd` + `cardsMeta` inscrits dans chaque JSON. Décision versionning : **tout versionner** — `corpus/results/*.json` commités comme preuves (pas d'ignoré). Quarantaine versionnée par `CHECKS_VERSION` (P0-4, preuve `npm run versions:check`).
+
 <!-- HISTORY-START -->
 <!-- HISTORY-END -->
 
-| Date | Modèle | Prompt | tscircuit | R1 | R2 | R3 | R4 | R5 | Vertes | Porte |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Date | Modèle | Prompt | tscircuit | R1 | R2 | R3 | R4 | R5 | Vertes | Porte | Coût | Latence max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-31 | meta-spark (muse-spark-1.3) | 1.4 | tscircuit 0.0.3036 | ✅ | ✅ | ✅ | ✅ | ✅ | 5/5 | ✅ porte M1 | $4.84 | 256s |
 
 ## 5. Règle de régression
 

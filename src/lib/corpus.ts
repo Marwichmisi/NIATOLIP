@@ -13,6 +13,10 @@ export interface CorpusCard {
   title: string;
   /** Ce que la carte prouve (doc 08). */
   proves: string;
+  /** Difficulté façon benchmark officiel (easy/medium/hard) — R1–R5 produit. */
+  difficulty: "easy" | "medium" | "hard";
+  /** Sujets (labels benchmark : i2c, spi, power, uart, sensor…), gelés avec le prompt. */
+  topics: string[];
   /** Prompt utilisateur canonique envoyé à l'agent (français). */
   prompt: string;
   /** Fiche de test fonctionnel (écrite avant commande, doc 05 §6). */
@@ -28,6 +32,8 @@ export const CORPUS_CARDS: CorpusCard[] = [
     id: "R1",
     title: "ESP32-C3 + BME280 (I2C) + USB-C + LED",
     proves: "Chaîne complète : MCU, capteur I2C, alimentation USB-C — carte de preuve n°1.",
+    difficulty: "medium",
+    topics: ["mcu", "i2c", "sensor", "usb-c", "power"],
     prompt: [
       "Conçois la carte R1 : ESP32-C3 avec capteur BME280 en I2C, alimentation USB-C, LED d'état.",
       "Contraintes : 2 couches, 50 × 40 mm max, composants JLCPCB Basic/Preferred en stock.",
@@ -50,6 +56,8 @@ export const CORPUS_CARDS: CorpusCard[] = [
     id: "R2",
     title: "RP2040 + flash + USB-C + boutons",
     proves: "Deuxième famille MCU (RP2040), boot/reset, flash externe.",
+    difficulty: "medium",
+    topics: ["mcu", "spi-flash", "usb-c", "button", "clock"],
     prompt: [
       "Conçois la carte R2 : RP2040 avec flash SPI externe, alimentation USB-C,",
       "boutons BOOT et RESET, LED d'état.",
@@ -73,6 +81,8 @@ export const CORPUS_CARDS: CorpusCard[] = [
     id: "R3",
     title: "Nœud capteur ESP32-C3 + I2C externe + JST batterie",
     proves: "Connectique usage « produit » : connecteur externe, JST batterie (charge exclue).",
+    difficulty: "easy",
+    topics: ["mcu", "i2c", "connector", "battery", "power"],
     prompt: [
       "Conçois la carte R3 : nœud capteur ESP32-C3 avec connecteur I2C externe (4 broches : VCC, GND, SDA, SCL),",
       "connecteur JST pour batterie (alimentation uniquement, pas de charge), LED d'état.",
@@ -96,6 +106,8 @@ export const CORPUS_CARDS: CorpusCard[] = [
     id: "R4",
     title: "Carte relais pilotée en UART via connecteur externe",
     proves: "Composant de sortie, pistes d'alimentation dimensionnées (basse tension uniquement).",
+    difficulty: "hard",
+    topics: ["uart", "power", "relay", "connector", "analog"],
     prompt: [
       "Conçois la carte R4 : carte relais basse tension pilotée en UART via un connecteur externe",
       "(VCC, GND, TX, RX), transistor de commande + diode de roue libre, LED d'état du relais.",
@@ -120,6 +132,8 @@ export const CORPUS_CARDS: CorpusCard[] = [
     id: "R5",
     title: "MCU + connecteur écran SPI + boutons",
     proves: "Bus SPI, connectique multiple.",
+    difficulty: "medium",
+    topics: ["mcu", "spi", "display", "button", "usb-c"],
     prompt: [
       "Conçois la carte R5 : MCU ESP32-C3 avec connecteur écran SPI (VCC, GND, SCK, MOSI, CS, DC, RST),",
       "2 boutons poussoirs, LED d'état, alimentation USB-C.",

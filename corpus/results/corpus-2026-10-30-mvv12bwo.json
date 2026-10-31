@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-30T13:48:22.344Z",
+  "promptVersion": "1.4 — issue #8 (templates T1–T3)",
+  "modelChoice": "meta-spark",
+  "modelId": "muse-spark-1.3",
+  "tscircuit": {
+    "tscircuit": "0.0.3036",
+    "eval": "0.0.1668",
+    "runframe": "0.0.3087"
+  },
+  "maxSteps": 50,
+  "threshold": "4/5",
+  "greens": 0,
+  "tested": 1,
+  "pass": false,
+  "cards": [
+    {
+      "id": "R1",
+      "title": "ESP32-C3 + BME280 (I2C) + USB-C + LED",
+      "projectId": "9a2a7f74-848b-494f-be1a-34f743795d19",
+      "green": false,
+      "gates": [],
+      "gateErrors": [
+        "Failed after 3 attempts. Last error: AI_APICallError: Cannot connect to API: "
+      ],
+      "steps": 0,
+      "toolCalls": 0,
+      "latencyMs": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "costUsd": null,
+      "snapshots": 0,
+      "error": "Failed after 3 attempts. Last error: AI_APICallError: Cannot connect to API: "
+    }
+  ]
+}
