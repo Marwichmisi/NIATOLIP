@@ -59,19 +59,31 @@ snapshot des fichiers (version N)
 Versions KiCad et tscircuit du worker épinglées dans l'image et inscrites dans le rapport. Toute violation DRC « warning » est listée dans le rapport ; seuls les bloquants (erreurs, nets non connectés) empêchent G4, mais les warnings sont visibles en H2.
 
 > **Fix G4 P0-6 #28 (2026-10-31, vérifié par repro locale sous image
-> `kicad/kicad:9.0`)** : le refus ERC n'était PAS les pins rail à 0,01 mm
-> (les power symbols natifs KiCad utilisent `length 0`) mais le token
-> `(power global|local)` émis par `circuit-json-to-kicad`
-> (`SymbolPower("global")` sur `Custom:rail_up/down`) : format v10 rejeté par
-> `kicad-cli 9.0.9` (« Failed to load schematic », exit 3). Rationnel complet
-> dans `normalizeKicadSchPower` (`worker/src/g5.js`) ; le worker normalise en
-> `(power)` avant ERC (occurrence tracée en warning dans le rapport).
-> Tri `hole_clearance` : les violations 0,16–0,19 mm vs règle 0,2 mm restent des
-> ERREURS bloquantes G4 — c'est la spec JLCPCB publique « Via hole to Track :
-> 0,2 mm » (https://jlcpcb.com/capabilities/pcb-capabilities), ni artefact
-> convertisseur ni warning fabricant (la surcharge via < 0,3 mm reste elle un
-> warning `fabricator-drc`). Cause probable côté solveur (marge obstacle 0,15
-> < 0,2 requis) : à corriger upstream, jamais en décotant le DRC ici.
+> `kicad/kicad:9.0` + job E2E Graetz vert)** — trois couches, prouvées dans
+> l'ordre :
+> 1. **Chargement** : le refus ERC n'était PAS les pins rail à 0,01 mm
+>    (les power symbols natifs KiCad utilisent `length 0`) mais le token
+>    `(power global|local)` émis par `circuit-json-to-kicad`
+>    (`SymbolPower("global")` sur `Custom:rail_up/down`) : format v10 rejeté par
+>    `kicad-cli 9.0.9` (« Failed to load schematic », exit 3). Rationnel complet
+>    dans `normalizeKicadSchPower` (`worker/src/g5.js`) ; le worker normalise en
+>    `(power)` avant ERC (occurrence tracée en warning dans le rapport).
+> 2. **ERC** : `power_pin_not_driven` (aucun `power_out`/PWR_FLAG dans les
+>    designs tscircuit) et `pin_not_connected` (pins NC flottantes) se règlent
+>    au niveau design, sans toucher aux seuils : `pinAttributes`
+>    (`VOUT: { providesPower }`, `GND: { providesGround }`,
+>    `NC: { doNotConnect }`) → pins `power_out` et marqueurs `no_connect`
+>    KiCad via le convertisseur. Voir `fixtures/g5-e2e/graetz.tsx` (référence
+>    G0–G3 `fixtures/gates/healthy-graetz.tsx` inchangée).
+> 3. **DRC** : les violations `hole_clearance` 0,15–0,19 mm vs règle 0,2 mm
+>    restent des ERREURS bloquantes G4 — c'est la spec JLCPCB publique
+>    « Via hole to Track : 0,2 mm » (https://jlcpcb.com/capabilities/pcb-capabilities),
+>    ni artefact convertisseur ni warning fabricant (la surcharge via < 0,3 mm
+>    reste elle un warning `fabricator-drc`). Cause : repli marge obstacle
+>    0,15 du solveur < 0,2 requis (bug upstream) + angle mort natif
+>    (`getHoleGeometries` ne voit que `pcb_hole`, jamais les trous de `pcb_via` —
+>    G3 vert sur board fautif). En attendant le fix upstream, le board E2E
+>    passe en 90×70 mm pour aérer le routage ; aucune décote DRC ici.
 
 ## 4. Pack fabrication (livrable utilisateur)
 

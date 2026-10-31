@@ -19,9 +19,11 @@ async function api(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
-  // Board représentatif P0-6 : Graetz à nets nommés (VRECT/VCC/GND) — les rails
-  // `Custom:rail_up/down` du convertisseur sont normalisés `(power)` côté worker.
-  const code = await readFile(new URL("../fixtures/gates/healthy-graetz.tsx", import.meta.url), "utf8");
+  // Board représentatif P0-6 : Graetz complet à nets nommés
+  // (fixtures/g5-e2e/graetz.tsx — dérivé de la référence G0–G3
+  // fixtures/gates/healthy-graetz.tsx + providesPower/providesGround,
+  // doNotConnect et board 90×70 pour G4 vert, voir l'en-tête de la fixture).
+  const code = await readFile(new URL("../fixtures/g5-e2e/graetz.tsx", import.meta.url), "utf8");
   // BOM de preuve : refs du Graetz ; LCSC/MPN NON VÉRIFIÉS (valeurs plausibles
   // pour smoke-test uniquement — jamais réutiliser comme sourcing réel, qui
   // exige searchComponents + getComponentDetails). Stock inconnu = warning
