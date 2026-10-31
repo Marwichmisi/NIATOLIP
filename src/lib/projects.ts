@@ -18,9 +18,17 @@ if (typeof window !== "undefined") {
 
 export const LOCAL_USER_ID = "local";
 
+export type AssemblyMode = "pcba-jlcpcb" | "pcb-seul" | "autre-fabricant" | "indecis";
+
+export function validateAssemblyMode(input: unknown): AssemblyMode {
+  if (input === "pcba-jlcpcb" || input === "pcb-seul" || input === "autre-fabricant" || input === "indecis") return input;
+  err("invalid_assembly_mode", "Mode d'assemblage invalide (pcba-jlcpcb | pcb-seul | autre-fabricant | indecis).");
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
+  assemblyMode: AssemblyMode;
   created_at: string;
   updated_at: string;
   current_version_id: string | null;
@@ -151,6 +159,7 @@ interface FileProjectDoc {
   id: string;
   user_id: string;
   name: string;
+  assemblyMode?: AssemblyMode;
   created_at: string;
   updated_at: string;
   current_version_id: string | null;
@@ -186,12 +195,13 @@ async function writeDoc(doc: FileProjectDoc): Promise<void> {
 const now = () => new Date().toISOString();
 
 function toSummaryPg(row: {
-  id: string; name: string; created_at: Date | string; updated_at: Date | string;
+  id: string; name: string; assembly_mode?: string | null; created_at: Date | string; updated_at: Date | string;
   current_version_id: string | null; current_version_no: number | null;
 }): ProjectSummary {
   return {
     id: row.id,
     name: row.name,
+    assemblyMode: (row.assembly_mode as AssemblyMode) ?? "indecis",
     created_at: new Date(row.created_at).toISOString(),
     updated_at: new Date(row.updated_at).toISOString(),
     current_version_id: row.current_version_id,
@@ -204,7 +214,7 @@ function toSummaryPg(row: {
 async function pgList(): Promise<ProjectSummary[]> {
   await initSchema();
   const { rows } = await getPool().query(
-    `select p.id, p.name, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
+    `select p.id, p.name, p.assembly_mode, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
      from projects p left join project_versions v on v.id = p.current_version_id
      where p.user_id = $1 order by p.updated_at desc`,
     [LOCAL_USER_ID]
@@ -246,13 +256,13 @@ async function pgCreate(name: string, seed?: Record<string, string>): Promise<Pr
   } finally {
     client.release();
   }
-  return { id, name, created_at: t, updated_at: t, current_version_id: versionId, current_version_no: 1 };
+  return { id, name, assemblyMode: "indecis", created_at: t, updated_at: t, current_version_id: versionId, current_version_no: 1 };
 }
 
 async function pgGet(id: string): Promise<ProjectSummary> {
   await initSchema();
   const { rows } = await getPool().query(
-    `select p.id, p.name, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
+    `select p.id, p.name, p.assembly_mode, p.created_at, p.updated_at, p.current_version_id, v.version_no as current_version_no
      from projects p left join project_versions v on v.id = p.current_version_id
      where p.id=$1 and p.user_id=$2`,
     [id, LOCAL_USER_ID]
@@ -451,6 +461,7 @@ function docSummary(doc: FileProjectDoc): ProjectSummary {
   return {
     id: doc.id,
     name: doc.name,
+    assemblyMode: doc.assemblyMode ?? "indecis",
     created_at: doc.created_at,
     updated_at: doc.updated_at,
     current_version_id: doc.current_version_id,
@@ -484,6 +495,7 @@ async function fileCreate(name: string, seed?: Record<string, string>): Promise<
     id: randomUUID(),
     user_id: LOCAL_USER_ID,
     name,
+    assemblyMode: "indecis",
     created_at: t,
     updated_at: t,
     current_version_id: versionId,
@@ -677,4 +689,31 @@ export function toApiError(e: unknown): Response {
   const status = (e as { status?: number })?.status ?? 500;
   const message = e instanceof Error ? e.message : "Erreur interne.";
   return Response.json({ error: { code, message } }, { status });
+}
+
+export async function getAssemblyMode(id: string): Promise<AssemblyMode> {
+  if (storageBackend() === "postgres") {
+    await initSchema();
+    const { rows } = await getPool().query("select assembly_mode from projects where id=$1", [id]);
+    if (rows.length === 0) err("not_found", "Projet introuvable.", 404);
+    const m = (rows[0] as { assembly_mode?: unknown }).assembly_mode;
+    return m === "pcba-jlcpcb" || m === "pcb-seul" || m === "autre-fabricant" ? (m as AssemblyMode) : "indecis";
+  }
+  const doc = await readDoc(id);
+  return doc.assemblyMode ?? "indecis";
+}
+
+export async function setAssemblyMode(id: string, mode: AssemblyMode): Promise<ProjectSummary> {
+  const clean = validateAssemblyMode(mode);
+  if (storageBackend() === "postgres") {
+    await initSchema();
+    const { rowCount } = await getPool().query("update projects set assembly_mode=$1, updated_at=now() where id=$2", [clean, id]);
+    if (rowCount === 0) err("not_found", "Projet introuvable.", 404);
+    return pgGet(id);
+  }
+  const doc = await readDoc(id);
+  doc.assemblyMode = clean;
+  doc.updated_at = now();
+  await writeDoc(doc);
+  return docSummary(doc);
 }

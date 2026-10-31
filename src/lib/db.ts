@@ -44,6 +44,7 @@ create table if not exists projects (
   name text not null,
   working_files jsonb not null default '{}',
   current_version_id text,
+  assembly_mode text not null default 'indecis',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -94,6 +95,8 @@ create table if not exists validation_jobs (
   drc jsonb,
   g4 jsonb,
   g5 jsonb,
+  g5_pcb jsonb,
+  g5_pcba jsonb,
   error text,
   created_at timestamptz not null default now(),
   started_at timestamptz,
@@ -113,6 +116,10 @@ create table if not exists artifacts (
 );
 create index if not exists idx_artifacts_job on artifacts(job_id);
 create index if not exists idx_artifacts_project on artifacts(project_id, created_at desc);
+-- P0-2 : G5 scindée + mode d'assemblage (migration idempotente des bases existantes).
+alter table validation_jobs add column if not exists g5_pcb jsonb;
+alter table validation_jobs add column if not exists g5_pcba jsonb;
+alter table projects add column if not exists assembly_mode text not null default 'indecis';
 `;
 
 /** Crée les tables au premier usage (idempotent, une seule fois par process). */

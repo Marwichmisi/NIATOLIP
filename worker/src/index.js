@@ -10,6 +10,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "pg";
 import JSZip from "jszip";
+import {
+  JLC_MIN_INLINE,
+  JLC_SPECS_COMMIT,
+  buildG5Pcb,
+  buildG5Pcba,
+  checkJlcSpecs,
+  computeCoverage,
+  getPcbBoardId,
+  parsePartsJson,
+} from "./g5.js";
 
 const { Pool } = pkg;
 
@@ -20,6 +30,9 @@ const TSCIRCUIT_CORE_VERSION = "0.0.2230";
 const CONVERTER_KICAD_VERSION = "0.0.258";
 const CONVERTER_GERBER_VERSION = "0.0.122";
 const CONVERTER_BOM_VERSION = "0.0.24";
+const CONVERTER_PNP_VERSION = "0.0.21";
+const FABRICATOR_DRC_VERSION = "0.0.4";
+// JLC_SPECS_COMMIT importé de ./g5.js (avec JLC_MIN_INLINE).
 const KICAD_IMAGE = "kicad/kicad:9.0";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
@@ -133,8 +146,10 @@ function summarizeKicadReport(raw, kind, exitCode) {
     }
     if (findings.length === 0 && exitCode !== 0) {
       // Schéma inconnu mais violations signalées : strict et honnête.
+      // Extrait brut joint pour diagnostic (borne à 200 o.).
       unparsed = true;
-      push("error", `${kind}_unparsed`, `Rapport ${kind} non vide (schéma JSON inattendu, ${JSON.stringify(raw).length} o.) — traité comme bloquant.`);
+      const excerpt = JSON.stringify(raw).slice(0, 200);
+      push("error", `${kind}_unparsed`, `Rapport ${kind} non vide (schéma JSON inattendu, ${JSON.stringify(raw).length} o., extrait : ${excerpt}) — traité comme bloquant.`);
     }
   } catch (e) {
     unparsed = true;
@@ -182,17 +197,6 @@ async function libGerberFiles(circuitJson) {
     return out;
   } catch (e) {
     return { __error: e.message };
-  }
-}
-
-function parsePartsJson(files) {
-  try {
-    const raw = files["parts.json"];
-    if (typeof raw !== "string") return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
   }
 }
 
@@ -254,22 +258,77 @@ async function recheckStock(lcscList) {
   return out;
 }
 
-function buildPnpFromCircuitJson(circuitJson) {
-  // Repli si `kicad-cli pcb export pos` échoue : positions lues défensivement.
-  const rows = [];
-  for (const el of circuitJson) {
-    if (el?.type !== "pcb_component") continue;
-    const ref = el.designator ?? el.name ?? el.source_component_id ?? null;
-    const x = el.x ?? el.pcb_x ?? el.center_x ?? null;
-    const y = el.y ?? el.pcb_y ?? el.center_y ?? null;
-    rows.push({ ref, x, y, layer: el.layer ?? "", rotation: el.rotation ?? 0 });
+async function runFabricatorDrc(circuitJson) {
+  // Surcharge JLCPCB (vias < 0,3 mm) : warning uniquement, jamais bloquant.
+  try {
+    const { runDrcChecks } = await import("@tscircuit/fabricator-drc");
+    const pcbBoardId = getPcbBoardId(circuitJson);
+    if (!pcbBoardId) return [];
+    const diags = runDrcChecks({ circuitJson, fabricatorPreset: "jlcpcb_economy", pcbBoardId });
+    return (Array.isArray(diags) ? diags : []).map((d) => ({
+      severity: "warning",
+      code: "fabricator_extra_charge",
+      message: String(d.message ?? "Surcharge fabricant possible (via < 0,3 mm).").slice(0, 300),
+    }));
+  } catch (e) {
+    return [{ severity: "warning", code: "fabricator_drc_unavailable", message: `Fabricator-DRC indisponible : ${e.message}` }];
   }
-  return rows;
+}
+
+async function buildPnpOfficial(circuitJson) {
+  // PnP officiel (P0-2/P0-5) : lib tscircuit, jamais de CSV aux coordonnées vides.
+  // Mode souple transitoire : rotations non résolues = warnings collectés, pas d'exception.
+  const rotationWarnings = [];
+  const orientationErrors = [];
+  let prepared = circuitJson;
+  try {
+    const { populatePartOrientationMetadata } = await import("circuit-json-to-pnp-csv");
+    try {
+      prepared = await populatePartOrientationMetadata(circuitJson, {
+        supplier: "jlcpcb",
+        partsEngineDisabled: true,
+      });
+    } catch (e) {
+      // partsEngine désactivé => la lib lève avec la liste des rotations non vérifiées.
+      // On la convertit en warnings (souple), on garde le JSON d'origine.
+      const msg = e instanceof Error ? e.message : String(e);
+      for (const line of msg.split("\n").slice(0, 20)) {
+        const t = line.trim();
+        if (t.length > 0) orientationErrors.push(t.slice(0, 300));
+      }
+      prepared = circuitJson;
+    }
+  } catch (e) {
+    orientationErrors.push(`populatePartOrientationMetadata indisponible : ${e.message}`);
+  }
+  try {
+    const { convertCircuitJsonToPickAndPlaceRows, convertCircuitJsonToPickAndPlaceCsv } = await import(
+      "circuit-json-to-pnp-csv"
+    );
+    const onRotationWarning = (w) => {
+      rotationWarnings.push(`${w.designator}: ${w.reason} — ${w.message}`.slice(0, 300));
+    };
+    const opts = { supplier: "jlcpcb", requireSupplierRotation: false, onRotationWarning };
+    const rows = convertCircuitJsonToPickAndPlaceRows(prepared, opts);
+    let csv = "";
+    try {
+      csv = convertCircuitJsonToPickAndPlaceCsv(prepared, { supplier: "jlcpcb", requireSupplierRotation: false });
+    } catch (e) {
+      // Ne devrait pas arriver en mode souple ; repli CSV manuel depuis rows.
+      const header = "Designator,Mid X,Mid Y,Layer,Rotation\n";
+      csv = header + rows.map((r) => `${r.designator},${Number(r.mid_x).toFixed(3)},${Number(r.mid_y).toFixed(3)},${r.layer},${r.rotation}`).join("\n") + "\n";
+    }
+    // Garde-fou anti-faux-vert : coordonnées manquantes = échec explicite.
+    const badCoords = rows.filter((r) => !Number.isFinite(r.mid_x) || !Number.isFinite(r.mid_y));
+    return { rows, csv, rotationWarnings, orientationErrors, badCoords, tool: `circuit-json-to-pnp-csv ${CONVERTER_PNP_VERSION} (supplier jlcpcb, souple)` };
+  } catch (e) {
+    return { rows: [], csv: "", rotationWarnings, orientationErrors, badCoords: [], tool: `pnp-échec: ${e.message}`, error: e.message };
+  }
 }
 
 // ---------- Rapport ----------
 
-function buildReport({ job, g0g3, evalStats, ercParsed, drcParsed, g4, bom, stock, pnp, gerberTool, kicadVersion, warnings }) {
+function buildReport({ job, g0g3, evalStats, ercParsed, drcParsed, g4, g5pcb, g5pcba, bom, stock, pnp, gerberTool, kicadVersion, warnings, fabricatorWarnings, specsTool }) {
   const lines = [
     `# Rapport de validation — job ${job.id}`,
     ``,
@@ -278,7 +337,8 @@ function buildReport({ job, g0g3, evalStats, ercParsed, drcParsed, g4, bom, stoc
     `- Worker : ${WORKER_ID} — image ${KICAD_IMAGE}`,
     `- kicad-cli : ${kicadVersion}`,
     `- tscircuit eval : ${TSCIRCUIT_EVAL_VERSION} / core ${TSCIRCUIT_CORE_VERSION} (overrides racine)`,
-    `- convertisseurs : kicad ${CONVERTER_KICAD_VERSION}, gerber ${CONVERTER_GERBER_VERSION}, bom ${CONVERTER_BOM_VERSION}`,
+    `- convertisseurs : kicad ${CONVERTER_KICAD_VERSION}, gerber ${CONVERTER_GERBER_VERSION}, bom ${CONVERTER_BOM_VERSION}, pnp ${CONVERTER_PNP_VERSION}`,
+    `- fabricant : @tscircuit/fabricator-drc ${FABRICATOR_DRC_VERSION} (preset jlcpcb_economy), specs ${JLC_SPECS_COMMIT.slice(0, 7)}`,
     ``,
     `## Gates`,
     ``,
@@ -291,15 +351,29 @@ function buildReport({ job, g0g3, evalStats, ercParsed, drcParsed, g4, bom, stoc
   }
   lines.push(
     ``,
-    `- G5 fabricabilité : voir section BOM/stock/PnP/Gerber`,
+    `- G5-PCB (PCB nu) : **${g5pcb.status.toUpperCase()}** — Gerber + BOM design + plancher JLCPCB`,
+  );
+  for (const f of (g5pcb.findings ?? []).slice(0, 20)) {
+    lines.push(`  - [${f.severity}] ${f.code} : ${f.message}`);
+  }
+  lines.push(
+    `- G5-PCBA (assemblage, souple) : **${g5pcba.status.toUpperCase()}** — stock/PnP/footprint en avertissement sauf BOM vide, coordonnées PnP et rupture confirmée`,
+  );
+  for (const f of (g5pcba.findings ?? []).slice(0, 20)) {
+    lines.push(`  - [${f.severity}] ${f.code} : ${f.message}`);
+  }
+  lines.push(
+    ``,
     `- BOM : ${bom.rows} lignes (outil : ${bom.tool})`,
     `- Stock revérifié le ${stock.checkedAt} : ${stock.known.length} connus, ${stock.unknown.length} inconnus, ${stock.outOfStock.length} en rupture confirmée`,
   );
   if (stock.outOfStock.length > 0) lines.push(`  - Ruptures : ${stock.outOfStock.join(", ")}`);
   if (stock.unknown.length > 0) lines.push(`  - Stock inconnu (warning, à revérifier avant commande) : ${stock.unknown.slice(0, 20).join(", ")}`);
   lines.push(
-    `- PnP : ${pnp.rows} lignes, cohérent avec la BOM : ${pnp.coherent ? "oui" : "NON — " + (pnp.missing ?? []).slice(0, 10).join(", ")}`,
+    `- PnP officiel : ${pnp.rows} lignes (${pnp.tool}), cohérent : ${pnp.coherent ? "oui" : "NON — " + (pnp.missing ?? []).slice(0, 10).join(", ")}`,
     `- Gerber : ${gerberTool}`,
+    `- Specs JLCPCB : ${specsTool}`,
+    ...(fabricatorWarnings.length > 0 ? [`- Fabricant : ${fabricatorWarnings.map((w) => w.message).join(" | ").slice(0, 400)}`] : [`- Fabricant : aucun surcoût détecté`]),
     ``,
     `## Warnings`,
     ...(warnings.length > 0 ? warnings.map((w) => `- ${w}`) : ["- aucun"]),
@@ -309,6 +383,7 @@ function buildReport({ job, g0g3, evalStats, ercParsed, drcParsed, g4, bom, stoc
     `- Pas de simulation électrique (SPICE) : un DRC propre peut être électriquement faux.`,
     `- Pas d'intégrité de signal ni d'impédance (hors périmètre D8).`,
     `- Stock/prix JLCPCB valables à l'instant de la revérification uniquement.`,
+    `- Rotations PnP JLCPCB en mode souple : vérifier visuellement avant commande (bascule strict après corpus).`,
     `- La première fabrication reste un prototype : petite quantité, test avant série.`,
     `- Validation humaine H2 obligatoire avant export du pack.`,
   );
@@ -435,12 +510,20 @@ async function processJob(job) {
   await writeArtifact(jobId, projectId, "sources", "sources.zip", sourcesZip);
 
   if (g4.status === "fail") {
-    const report = buildReport({ job, g0g3: job.g0g3, evalStats, ercParsed, drcParsed, g4, bom: { rows: 0, tool: "non calculée (G4 rouge)" }, stock: { checkedAt: new Date().toISOString(), known: [], unknown: [], outOfStock: [] }, pnp: { rows: 0, coherent: false, missing: [] }, gerberTool: "non généré (G4 rouge : pas d'exports finaux)", kicadVersion, warnings });
+    const blocked = { status: "fail", findings: [{ severity: "error", code: "g4_blocked", message: "G4 rouge : G5-PCB/G5-PCBA non jugées — corrigez puis relancez." }], stats: { blocked: 1 } };
+    const report = buildReport({ job, g0g3: job.g0g3, evalStats, ercParsed, drcParsed, g4, g5pcb: blocked, g5pcba: blocked, bom: { rows: 0, tool: "non calculée (G4 rouge)" }, stock: { checkedAt: new Date().toISOString(), known: [], unknown: [], outOfStock: [] }, pnp: { rows: 0, coherent: false, missing: [], tool: "non calculé (G4 rouge)" }, gerberTool: "non généré (G4 rouge : pas d'exports finaux)", kicadVersion, warnings, fabricatorWarnings: [], specsTool: "non vérifié (G4 rouge)" });
     await writeArtifact(jobId, projectId, "report", "validation-report.md", report);
-    await pool.query(
-      "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5=$7, error=$8, finished_at=now() where id=$1",
-      [jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION, JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code, stderr: ercRun.stderr.slice(0, 500) }), JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code, stderr: drcRun.stderr.slice(0, 500) }), JSON.stringify(g4), null, `G4 rouge : ${blocking.length} violation(s) bloquante(s) — corrigez puis relancez.`]
-    );
+    try {
+      await pool.query(
+        "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5_pcb=$7, g5_pcba=$8, g5=$9, error=$10, finished_at=now() where id=$1",
+        [jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION, JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code, stderr: ercRun.stderr.slice(0, 500) }), JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code, stderr: drcRun.stderr.slice(0, 500) }), JSON.stringify(g4), JSON.stringify(blocked), JSON.stringify(blocked), JSON.stringify(blocked), `G4 rouge : ${blocking.length} violation(s) bloquante(s) — corrigez puis relancez.`]
+      );
+    } catch {
+      await pool.query(
+        "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5=$7, error=$8, finished_at=now() where id=$1",
+        [jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION, JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code, stderr: ercRun.stderr.slice(0, 500) }), JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code, stderr: drcRun.stderr.slice(0, 500) }), JSON.stringify(g4), JSON.stringify(blocked), `G4 rouge : ${blocking.length} violation(s) bloquante(s) — corrigez puis relancez.`]
+      );
+    }
     log(`job ${jobId} : G4 ROUGE (${blocking.length} bloquantes)`);
     return;
   }
@@ -480,28 +563,38 @@ async function processJob(job) {
   const bom = await buildBom(circuitJson, parts);
   const lcscList = parts.map((p) => p?.lcsc).filter((l) => typeof l === "string");
   const stock = await recheckStock(lcscList);
-  const bomRefs = new Set(parts.map((p) => p?.ref).filter((r) => typeof r === "string"));
 
-  // 6. PnP.
-  let pnpRows = [];
-  let pnpTool = "kicad-cli pos";
-  if (kicadOut.posCsv) {
-    const text = await readFile(kicadOut.posCsv, "utf8");
-    const lines = text.split("\n").filter((l) => l.trim().length > 0);
-    pnpRows = lines.slice(1).map((l) => ({ raw: l }));
-    pnpRows._refs = lines.slice(1).map((l) => l.split(",")[0]?.replace(/"/g, "").trim()).filter(Boolean);
-  } else {
-    const cj = buildPnpFromCircuitJson(circuitJson);
-    pnpTool = "circuit-json (repli)";
-    warnings.push("PnP : repli circuit-json (kicad-cli pos en échec).");
-    pnpRows = cj;
-    pnpRows._refs = cj.map((r) => r.ref).filter(Boolean);
+  // 5b. Specs fabricant JLCPCB (plancher) + Fabricator-DRC (surcharge).
+  // Inline versionné (paquet github sans dist, voir g5.js) + tentative import.
+  let jlcMin = { ...JLC_MIN_INLINE };
+  let specsTool = `jlcpcb-manufacturing-specs ${JLC_SPECS_COMMIT.slice(0, 7)} (jlcMinTolerances inline)`;
+  try {
+    const specs = await import("@tscircuit/jlcpcb-manufacturing-specs");
+    if (specs?.jlcMinTolerances) {
+      jlcMin = { ...jlcMin, ...specs.jlcMinTolerances };
+      specsTool = `jlcpcb-manufacturing-specs ${JLC_SPECS_COMMIT.slice(0, 7)} (jlcMinTolerances)`;
+    }
+  } catch {
+    // Repli silencieux sur l'inline synchronisé (test de sync : g5:fixtures G5-9).
   }
-  const missing = [...bomRefs].filter((r) => !(pnpRows._refs ?? []).includes(r));
-  const pnp = { rows: pnpRows.length, coherent: missing.length === 0 && pnpRows.length > 0, missing };
-  const pnpHeader = "Designator,Mid X,Mid Y,Layer,Rotation\n";
-  const pnpBody = (pnpRows._refs ?? []).map((r) => `"${r}",,,,`).join("\n");
-  const pnpCsv = kicadOut.posCsv ? await readFile(kicadOut.posCsv, "utf8") : `${pnpHeader}${pnpBody}\n`;
+  const specsFindings = checkJlcSpecs(circuitJson, jlcMin);
+  const fabricatorWarnings = await runFabricatorDrc(circuitJson);
+
+  // 6. PnP officiel — kicad-cli pos n'est plus utilisé comme source (format
+  // fragile) ; il reste un indice de cohérence optionnel.
+  const pnpOfficial = await buildPnpOfficial(circuitJson);
+  const pnpRows = pnpOfficial.rows;
+  const pnpTool = pnpOfficial.tool;
+  const pnpRefs = pnpRows.map((r) => r.designator).filter(Boolean);
+  if (pnpOfficial.error) warnings.push(`PnP officiel : ${pnpOfficial.error}`);
+  for (const w of [...pnpOfficial.rotationWarnings, ...pnpOfficial.orientationErrors].slice(0, 10)) {
+    warnings.push(`PnP rotation (souple) : ${w}`);
+  }
+  // Triple couverture : sources (assemblées : ni testpoints ni DNP) ↔ BOM ↔ PnP.
+  const { bomRefs, fittedSources, missingInBom, missingInPnp, extraInPnp } = computeCoverage({ circuitJson, parts, pnpRefs });
+  const pnpCoherent = missingInPnp.length === 0 && extraInPnp.length === 0 && pnpRows.length > 0;
+  const pnp = { rows: pnpRows.length, coherent: pnpCoherent, missing: [...missingInPnp, ...extraInPnp], tool: pnpTool };
+  const pnpCsv = pnpOfficial.csv && pnpOfficial.csv.length > 0 ? pnpOfficial.csv : "Designator,Mid X,Mid Y,Layer,Rotation\n";
   await writeArtifact(jobId, projectId, "pnp", "pnp.csv", pnpCsv);
   await writeArtifact(jobId, projectId, "bom", "bom.csv", bom.csv);
 
@@ -512,37 +605,48 @@ async function processJob(job) {
   }
   await writeArtifact(jobId, projectId, "kicad", "project-kicad.zip", await kicadZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
 
-  // 8. Verdict G5.
-  const g5Findings = [];
-  if (bomRefs.size === 0) g5Findings.push({ severity: "error", code: "bom_empty", message: "BOM vide : parts.json manquant ou sans ref — renseignez [{ ref, lcsc, mpn, role }]." });
-  const missingLcsc = parts.filter((p) => typeof p?.ref === "string" && typeof p?.lcsc !== "string").map((p) => p.ref);
-  if (missingLcsc.length > 0) g5Findings.push({ severity: "error", code: "bom_incomplete", message: `Refs sans LCSC : ${missingLcsc.slice(0, 10).join(", ")} — searchComponents d'abord.` });
-  if (stock.outOfStock.length > 0) g5Findings.push({ severity: "error", code: "stock_empty", message: `Rupture confirmée : ${stock.outOfStock.join(", ")} — changer de pièce.` });
-  if (!pnp.coherent) g5Findings.push({ severity: "error", code: "pnp_mismatch", message: `PnP incohérent (${pnpTool}) : ${(missing ?? []).slice(0, 10).join(", ") || "aucune ligne"}.` });
-  if (gerberTool.startsWith("échec")) g5Findings.push({ severity: "error", code: "gerber_failed", message: "Gerber non généré (kicad-cli et lib en échec)." });
-  for (const u of stock.unknown.slice(0, 10)) {
-    g5Findings.push({ severity: "warning", code: "stock_unknown", message: `Stock inconnu pour ${u} — revérifier avant commande.` });
-  }
-  const g5 = {
-    status: g5Findings.some((f) => f.severity === "error") ? "fail" : "pass",
-    findings: g5Findings.slice(0, 20),
-    stats: { bomRows: bom.rows, pnpRows: pnp.rows, outOfStock: stock.outOfStock.length, unknownStock: stock.unknown.length, pnpCoherent: pnp.coherent ? 1 : 0 },
-  };
+  // 8. Verdicts G5 scindés (P0-2, helpers purs testés : worker/src/g5.js).
+  const gerberFailed = gerberTool.startsWith("échec");
+  const g5pcb = buildG5Pcb({ bomRefs, missingInBom, gerberFailed, specsFindings, fabricatorWarnings, bomRows: bom.rows });
 
-  const report = buildReport({ job, g0g3: job.g0g3, evalStats, ercParsed, drcParsed, g4, bom, stock, pnp, gerberTool, kicadVersion, warnings });
+  const g5pcba = buildG5Pcba({
+    parts, bomRefs, missingInPnp, extraInPnp,
+    pnpRowCount: pnpRows.length, pnpTool,
+    badCoords: pnpOfficial.badCoords ?? [], pnpError: pnpOfficial.error ?? null,
+    stock, gerberFailed,
+    rotationWarnings: pnpOfficial.rotationWarnings, orientationErrors: pnpOfficial.orientationErrors,
+    fabricatorWarnings, bomRows: bom.rows, pnpCoherent: pnp.coherent,
+  });
+  // Compat : legacy g5 = PCBA (le plus strict historiquement).
+  const g5 = g5pcba;
+
+  const report = buildReport({ job, g0g3: job.g0g3, evalStats, ercParsed, drcParsed, g4, g5pcb, g5pcba, bom, stock, pnp, gerberTool, kicadVersion, warnings, fabricatorWarnings, specsTool });
   await writeArtifact(jobId, projectId, "report", "validation-report.md", report);
 
-  await pool.query(
-    "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5=$7, error=$8, finished_at=now() where id=$1",
-    [
-      jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION,
-      JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code }),
-      JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code }),
-      JSON.stringify(g4), JSON.stringify(g5),
-      g5.status === "pass" ? null : `G5 rouge : ${g5Findings.filter((f) => f.severity === "error").length} erreur(s) — voir rapport.`,
-    ]
-  );
-  log(`job ${jobId} : G4 ${g4.status} / G5 ${g5.status}`);
+  try {
+    await pool.query(
+      "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5_pcb=$7, g5_pcba=$8, g5=$9, error=$10, finished_at=now() where id=$1",
+      [
+        jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION,
+        JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code }),
+        JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code }),
+        JSON.stringify(g4), JSON.stringify(g5pcb), JSON.stringify(g5pcba), JSON.stringify(g5),
+        g5pcb.status === "pass" ? null : `G5-PCB rouge : ${g5pcb.findings.filter((f) => f.severity === "error").length} erreur(s) — voir rapport.`,
+      ]
+    );
+  } catch {
+    await pool.query(
+      "update validation_jobs set status='done', kicad_version=$2, tscircuit_version=$3, erc=$4, drc=$5, g4=$6, g5=$7, error=$8, finished_at=now() where id=$1",
+      [
+        jobId, kicadVersion, TSCIRCUIT_EVAL_VERSION,
+        JSON.stringify({ summary: ercParsed.summary, exitCode: ercRun.code }),
+        JSON.stringify({ summary: drcParsed.summary, exitCode: drcRun.code }),
+        JSON.stringify(g4), JSON.stringify(g5),
+        g5.status === "pass" ? null : `G5 rouge : ${g5pcba.findings.filter((f) => f.severity === "error").length} erreur(s) — voir rapport.`,
+      ]
+    );
+  }
+  log(`job ${jobId} : G4 ${g4.status} / G5-PCB ${g5pcb.status} / G5-PCBA ${g5pcba.status}`);
 }
 
 // ---------- Boucle ----------

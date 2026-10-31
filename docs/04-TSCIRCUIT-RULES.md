@@ -28,7 +28,7 @@ Les gates sont des verdicts produit construits **sur** les diagnostics natifs, p
 | G2 | `runAllPlacementChecks` (≈ `tsci check placement`) | Placement propre, rien hors carte (seuls `*_error` bloquent) |
 | G3 | `runAllRoutingChecks` sur copie — le runner mute son entrée (`addStartAndEndPortIdsIfMissing`, appelé aussi via `checkEachPcbTraceNonOverlapping` qui couvre les self-shorts, ≈ `tsci check routing`) | Routage complet, 0 net non routé (seuls `*_error` bloquent ; jamais jugée si G2 rouge) |
 | G4 | `kicad-cli` ERC/DRC sur l'export KiCad (worker Docker) | Inchangé — juge externe, voir doc 05 |
-| G5 | Scindée **G5-PCB / G5-PCBA** (doc 15 §4.4) : PnP officiel, couverture BOM, DRC fabricant JLCPCB | Selon le mode d'assemblage du projet |
+| G5 | Scindée **G5-PCB / G5-PCBA** (doc 15 §4.4) : PnP officiel, couverture BOM, DRC fabricant JLCPCB | G4 + G5-PCB verts exigés ; G5-PCBA informative (mode enregistré et surfacé, enforcement en #20) |
 
 Pendant le développement, suivre la philosophie du skill officiel : rendre d'abord le circuit correct, traiter les diagnostics dans l'ordre netlist → placement → routage. La séquence bloquante « export validé » est imposée par le serveur (P0), pas par l'ordre d'appel des outils.
 

@@ -21,9 +21,15 @@ RUN node --version && npm --version && kicad-cli --version
 
 WORKDIR /worker
 COPY package.json package-lock.json ./
-# Cache npm + retries élevés : même cause que l'image web (AGENTS.md) —
-# le registre réinitialise les connexions sur les gros arbres tscircuit.
-RUN --mount=type=cache,target=/home/kicad/.npm,uid=1000,gid=1000 npm ci --omit=dev --no-audit --no-fund \
+# Dépendances EXPLICITES dont transitives (R5 revue #13) : le worker tourne avec
+# --legacy-peer-deps (pas d'auto-install des peers) dans une image qui ne
+# contient QUE worker/node_modules — chaque peer importé à l'exécution par
+# @tscircuit/eval ou @tscircuit/core DOIT donc être épinglé dans package.json
+# (math-utils, kicad-to-circuit-json, debug, sucrase, comlink, react,
+# footprinter, minicssgrid, bpc, spice… — constatés un par un en E2E #13).
+# Ne JAMAIS « nettoyer » cette liste au grep : vérifier par
+# `npm run g5:fixtures` (bloc G5-8, fermeture des imports) + un job E2E réel.
+RUN --mount=type=cache,target=/home/kicad/.npm,uid=1000,gid=1000 npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund \
   --fetch-retries=10 --fetch-retry-mintimeout=30000 --fetch-retry-maxtimeout=180000
 COPY src ./src
 

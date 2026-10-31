@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   createVersion,
+  getAssemblyMode,
   getVersionFiles,
   getWorkingFiles,
   putWorkingFiles,
@@ -655,7 +656,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     exportPack: tool({
       description:
-        "EXPORT NON VALIDÉ (M1) — archive des sources + BOM de travail, SANS Gerber ni DRC KiCad. Après requestFinalApproval approuvée uniquement. Le pack fabrication VALIDÉ (G4/G5) passe par exportManufacturingPack. L'utilisateur approuve explicitement le téléchargement.",
+        "EXPORT NON VALIDÉ (M1) — archive des sources + BOM de travail, SANS Gerber ni DRC KiCad. Après requestFinalApproval approuvée uniquement. Le pack fabrication VALIDÉ (G4+G5-PCB) passe par exportManufacturingPack. L'utilisateur approuve explicitement le téléchargement.",
       inputSchema: z.object({
         note: z.string().max(200).optional().describe("Note d'export."),
       }),
@@ -672,7 +673,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     requestManufacturingValidation: tool({
       description:
-        "FABRICATION G4/G5 — fige la copie de travail en version puis lance un job worker KiCad (export KiCad + kicad-cli ERC/DRC + Gerber/BOM/PnP). N'appeler qu'à gates G0–G3 vertes. Le job est ASYNCHRONE : relever le jobId puis interroger getValidationResult.",
+        "FABRICATION G4/G5-PCB/G5-PCBA — fige la copie de travail en version puis lance un job worker KiCad (export KiCad + kicad-cli ERC/DRC + Gerber/BOM/PnP officiel + specs JLCPCB). N'appeler qu'à gates G0–G3 vertes. Le job est ASYNCHRONE : relever le jobId puis interroger getValidationResult.",
       inputSchema: z.object({
         label: z.string().max(120).optional().describe("Libellé de la version figée."),
         g0g3: z
@@ -702,7 +703,7 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     getValidationResult: tool({
       description:
-        "Résultat du job worker (G4 ERC/DRC, G5 fabricabilité) : rapport structuré borné (20 findings max). Si queued/running, attendre puis relancer — ne jamais inventer un verdict. Si G4 rouge, corriger le code et relancer requestManufacturingValidation.",
+        "Résultat du job worker (G4 ERC/DRC, G5-PCB/G5-PCBA) : rapport structuré borné (20 findings max par gate). Si queued/running, attendre puis relancer — ne jamais inventer un verdict. Si G4 ou G5-PCB rouge, corriger le code et relancer requestManufacturingValidation.",
       inputSchema: z.object({
         jobId: z.string().min(1).max(64).describe("Job rendu par requestManufacturingValidation."),
       }),
@@ -717,9 +718,9 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
 
     exportManufacturingPack: tool({
       description:
-        "EXPORT VALIDÉ (M2) — pack fabrication (gerber.zip, bom.csv, pnp.csv, project-kicad.zip, sources.zip, validation-report.md). EXIGE : job done avec G4+G5 verts + requestFinalApproval (H2) approuvée. L'utilisateur approuve explicitement le téléchargement.",
+        "EXPORT VALIDÉ (M2) — pack fabrication (gerber.zip, bom.csv, pnp.csv, project-kicad.zip, sources.zip, validation-report.md). EXIGE : job done avec G4+G5-PCB verts + requestFinalApproval (H2) approuvée. G5-PCBA souple : vert avec avertissements possibles (stock inconnu, footprint non vérifié, rotations PnP) — lire validation-report.md avant commande. L'utilisateur approuve explicitement le téléchargement.",
       inputSchema: z.object({
-        jobId: z.string().min(1).max(64).describe("Job G4+G5 vert."),
+        jobId: z.string().min(1).max(64).describe("Job G4+G5-PCB vert."),
         note: z.string().max(200).optional().describe("Note d'export."),
       }),
       execute: async ({ jobId }) => {
@@ -727,23 +728,32 @@ export function createAgentTools(ctx: AgentRunContext, state: AgentRunState): To
         if (job.projectId !== ctx.projectId) {
           throw new Error("Ce job appartient à un autre projet.");
         }
-        if (job.status !== "done" || job.g4?.status !== "pass" || job.g5?.status !== "pass") {
+        const g5pcb = job.g5_pcb ?? job.g5;
+        const g5pcba = job.g5_pcba ?? job.g5;
+        if (job.status !== "done" || job.g4?.status !== "pass" || g5pcb?.status !== "pass") {
           const detail =
             job.status !== "done"
               ? `job ${job.status} — attendez le worker (getValidationResult)`
-              : `G4:${job.g4?.status ?? "?"} G5:${job.g5?.status ?? "?"} — corrigez puis relancez`;
+              : `G4:${job.g4?.status ?? "?"} G5-PCB:${g5pcb?.status ?? "?"} G5-PCBA:${g5pcba?.status ?? "?"} — corrigez puis relancez`;
           throw new Error(`Pack validé refusé : ${detail}.`);
         }
         const v = await createVersion(ctx.projectId, `Export fab validé (job ${jobId.slice(0, 8)})`);
+        const pcbaWarnings = (g5pcba?.findings ?? []).filter((f) => f.severity === "warning").slice(0, 10).map((f) => `${f.code}: ${f.message}`);
+        // R2 : mode surfacé (enforcement complet en #20).
+        const assemblyMode = await getAssemblyMode(ctx.projectId);
         return {
           ok: true,
           jobId: job.id,
           snapshot: `v${v.version_no}`,
           versionNo: job.versionNo,
           kicadVersion: job.kicadVersion,
+          assemblyMode,
+          g5_pcb: g5pcb?.status ?? null,
+          g5_pcba: g5pcba?.status ?? null,
+          pcbaWarnings,
           downloads: (job.artifacts ?? []).map((a) => ({ kind: a.kind, filename: a.filename, bytes: a.bytes, url: a.url })),
           report: (job.artifacts ?? []).find((a) => a.kind === "report")?.url ?? null,
-          note: "Pack validé G4/G5 + H2 — versions d'outils citées dans validation-report.md.",
+          note: "Pack validé G4+G5-PCB + H2 — versions d'outils citées dans validation-report.md. G5-PCBA souple : avertissements à lire avant commande.",
         };
       },
     }),

@@ -57,6 +57,9 @@ export interface ValidationJob {
   drc: unknown;
   g4: GateVerdict | null;
   g5: GateVerdict | null;
+  /** P0-2 : G5 scindée. `g5` reste le legacy (= PCBA pour compat). */
+  g5_pcb: GateVerdict | null;
+  g5_pcba: GateVerdict | null;
   error: string | null;
   created_at: string;
   started_at: string | null;
@@ -109,6 +112,8 @@ function toJob(row: Record<string, unknown>): ValidationJob {
     drc: (row.drc as unknown) ?? null,
     g4: (row.g4 as GateVerdict | null) ?? null,
     g5: (row.g5 as GateVerdict | null) ?? null,
+    g5_pcb: (row.g5_pcb as GateVerdict | null) ?? null,
+    g5_pcba: (row.g5_pcba as GateVerdict | null) ?? null,
     error: (row.error as string | null) ?? null,
     created_at: new Date(row.created_at as string).toISOString(),
     started_at: row.started_at ? new Date(row.started_at as string).toISOString() : null,
@@ -181,10 +186,11 @@ async function pgLatestForProject(projectId: string): Promise<ValidationJob | nu
 
 async function pgLatestGreen(projectId: string): Promise<ValidationJob | null> {
   await initSchema();
-  // Dernier job terminé avec G4+G5 verts (JSONB : g4->>'status' = 'pass').
+  // P0-2 : le pack « validé » exige G4 + G5-PCB verts. G5-PCBA souple (warnings)
+  // n'est pas bloquante ; compat legacy (jobs pré-P0-2 sans g5_pcb) via g5.
   const { rows } = await getPool().query(
     `select * from validation_jobs where project_id=$1 and status='done'
-     and g4->>'status'='pass' and g5->>'status'='pass'
+     and g4->>'status'='pass' and (g5_pcb->>'status'='pass' or (g5_pcb is null and g5->>'status'='pass'))
      order by finished_at desc nulls last, created_at desc limit 1`,
     [projectId]
   );
@@ -243,6 +249,8 @@ async function fileCreate(
     drc: null,
     g4: null,
     g5: null,
+    g5_pcb: null,
+    g5_pcba: null,
     error: null,
     created_at: now,
     started_at: null,
@@ -305,8 +313,15 @@ export async function latestValidationJob(projectId: string): Promise<Validation
 export async function latestGreenValidationJob(projectId: string): Promise<ValidationJob | null> {
   if (isPgConfigured()) return pgLatestGreen(projectId);
   const doc = await fileReadDoc();
+  const isGreen = (j: { status?: string; g4?: { status?: string } | null; g5?: { status?: string } | null; g5_pcb?: { status?: string } | null }) => {
+    if (j.status !== "done" || j.g4?.status !== "pass") return false;
+    if (j.g5_pcb?.status === "pass") return true;
+    // Compat jobs pré-P0-2 : legacy g5 fait foi.
+    if (!j.g5_pcb && j.g5?.status === "pass") return true;
+    return false;
+  };
   const jobs = doc.jobs
-    .filter((j) => j.projectId === projectId && j.status === "done" && j.g4?.status === "pass" && j.g5?.status === "pass")
+    .filter((j) => j.projectId === projectId && isGreen(j))
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   if (jobs.length === 0) return null;
   return fileGet(jobs[0].id);
@@ -414,6 +429,8 @@ export function summarizeJobForAgent(job: ValidationJob): Record<string, unknown
     tscircuitVersion: job.tscircuitVersion,
     g4: slice(job.g4),
     g5: slice(job.g5),
+    g5_pcb: slice(job.g5_pcb ?? job.g5),
+    g5_pcba: slice(job.g5_pcba ?? job.g5),
     ercSummary: erc?.summary ?? null,
     drcSummary: drc?.summary ?? null,
     error: job.error,

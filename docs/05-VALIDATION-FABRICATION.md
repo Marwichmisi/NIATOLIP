@@ -17,7 +17,8 @@
 | G2 | Placement natif : `runAllPlacementChecks` (seuls `*_error` bloquent) | Serveur | Routage |
 | G3 | Routage natif : `runAllRoutingChecks` sur copie — le runner mute son entrée (seuls `*_error` bloquent ; jamais jugée si G2 rouge car le core skippe le routage) | Serveur (autorouteur intégré) | Gate fabrication |
 | G4 | ERC + DRC sur le fichier KiCad exporté (`kicad-cli sch erc` / `pcb drc`, format JSON, code de sortie pris en compte) | Worker KiCad | Revue H2 |
-| G5 | Fabricabilité : BOM complète avec références LCSC en stock revérifiées, PnP cohérent avec la BOM, Gerber généré sans erreur | Worker + jlcsearch | Export du pack |
+| G5-PCB | PCB nu : BOM design (refs + couverture `source_component`), Gerber généré, plancher JLCPCB (`jlcMinTolerances`, `fabricator-drc` en warning) | Worker + specs | Export du pack |
+| G5-PCBA | Assemblage (souple) : LCSC + PnP officiel `circuit-json-to-pnp-csv` (coordonnées obligatoires, `supplier:'jlcpcb'`), couverture triple, rupture 0 = erreur ; stock inconnu, footprint non vérifié, statuts non-`verified`, rotations non résolues = warnings « à vos risques » | Worker + jlcsearch | Étiquette PCBA du pack (non bloquante) |
 
 Règles :
 
@@ -26,7 +27,7 @@ Règles :
 - Garde-fou de boucle actuel : consigne « 2 échecs identiques → changer de stratégie » (`noteFailure`). Les budgets différenciés doc 12 §6.3 (G1/G2 : 5 échecs puis escalade, G3 : 3 tentatives avec variation imposée) ne sont **pas** implémentés — voir backlog.
 - Un échec de gate renvoie à l'agent un rapport structuré (type, sévérité, composant/net concerné, message) — jamais un simple « ça a échoué ».
 - Aucun contournement par l'agent : il ne peut ni abaisser un seuil, ni marquer une gate comme passée manuellement.
-- L'utilisateur peut télécharger un projet **non validé** (export KiCad/code source) à tout moment, mais le pack fabrication « validé » exige G0–G5 verts + H2.
+- L'utilisateur peut télécharger un projet **non validé** (export KiCad/code source) à tout moment, mais le pack fabrication « validé » exige G0–G4 + G5-PCB verts + H2. G5-PCBA souple (warnings) est étiquetée dans le pack, jamais bloquante.
 
 ## 2. Auto-revue visuelle (avant H2)
 
@@ -56,6 +57,8 @@ snapshot des fichiers (version N)
 ```
 
 Versions KiCad et tscircuit du worker épinglées dans l'image et inscrites dans le rapport. Toute violation DRC « warning » est listée dans le rapport ; seuls les bloquants (erreurs, nets non connectés) empêchent G4, mais les warnings sont visibles en H2.
+
+> **Limitation G4 connue (2026-10-30, hors P0-2)** : `circuit-json-to-kicad` émet les symboles d'alimentation (`Custom:rail_up/down`, issus des nets nommés) avec des pins de longueur 0,01 mm, que `kicad-cli 9.0.9` refuse de charger (« Failed to load schematic », exit 3) — aucun design à nets nommés ne passe G4-ERC en l'état (tâche P0 dédiée #28). Le rapport cite l'extrait brut (`erc_unparsed`).
 
 ## 4. Pack fabrication (livrable utilisateur)
 
