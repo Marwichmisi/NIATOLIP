@@ -1,10 +1,9 @@
 // Fixture E2E G5 — carte minimale 100 % CMS, SANS nets nommés, SANS vias attendus.
-// Pourquoi pas le Graetz (doc 12 §7) : le convertisseur circuit-json-to-kicad
-// émet les symboles d'alimentation `Custom:rail_up/down` avec des pins de
-// longueur 0,01 mm, que kicad-cli 9.0.9 refuse de charger (« Failed to load
-// schematic », exit 3) — aucun job à nets nommés ne peut passer G4-ERC en
-// l'état (limitation G4 pré-existante, hors P0-2, voir docs/05 §3).
-// Cette carte prouve le pipeline G5 complet (Gerber/BOM/PnP officiel/specs).
+// Historique P0-6 #28 : ce board servait de board d'évitement tant que le
+// convertisseur émettait `(power global)` (rejeté par kicad-cli 9.0.9, exit 3 —
+// à tort attribué aux « pins 0,01 mm »). Depuis la normalisation worker
+// `(power global|local)` → `(power)`, la preuve E2E porte sur le Graetz à nets
+// nommés (scripts/g5-e2e.ts). Cette carte reste un smoke-test pipeline G5.
 circuit.add(
   <board width="20mm" height="20mm" layers={2}>
     <resistor

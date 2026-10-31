@@ -67,7 +67,7 @@
     "circuit-json-to-bom-csv": "0.0.24",
     "circuit-json-to-bpc": "0.0.14",
     "circuit-json-to-gerber": "0.0.122",
-    "circuit-json-to-kicad": "0.0.258",
+    "circuit-json-to-kicad": "0.0.262",
     "circuit-json-to-lbrn": "0.0.89",
     "circuit-json-to-pnp-csv": "0.0.21",
     "circuit-json-to-spice": "0.0.46",

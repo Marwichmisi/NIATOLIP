@@ -29,6 +29,7 @@ async function main(): Promise<void> {
   const specs = await import("@tscircuit/jlcpcb-manufacturing-specs");
   const g5 = (await import("../worker/src/g5.js")) as unknown as {
     JLC_MIN_INLINE: Record<string, number>;
+    normalizeKicadSchPower: (sch: string) => { text: string; count: number };
     getFittedSourceNames: (cj: unknown[]) => string[];
     computeCoverage: (args: { circuitJson: unknown[]; parts: Array<Record<string, unknown>>; pnpRefs: string[] }) => { fittedSources: string[]; missingInBom: string[]; missingInPnp: string[]; extraInPnp: string[] };
     buildG5Pcba: (args: Record<string, unknown>) => { status: string; findings: Array<{ code: string; severity: string }> };
@@ -157,6 +158,17 @@ async function main(): Promise<void> {
     assert(JSON.stringify(keys) === JSON.stringify(inlineKeys), `mêmes clés specs (paquet: ${keys.length}, inline: ${inlineKeys.length})`);
     const diff = keys.filter((k) => (specs.jlcMinTolerances as Record<string, number>)[k] !== (g5.JLC_MIN_INLINE as Record<string, number>)[k]);
     assert(diff.length === 0, `valeurs inline sync avec le paquet (${diff.join(", ") || "ok"})`);
+  }
+
+  console.log("== G5-10 normalisation (power global|local) → (power) (P0-6 #28) ==");
+  {
+    const sample = "(lib_symbols (symbol \"Custom:rail_up_1_1\" (power global) (pin (length 0.01)))) (symbol \"X\" (power local)) (symbol \"Y\" (power))";
+    const { text, count } = g5.normalizeKicadSchPower(sample);
+    assert(count === 2, `2 occurrences normalisées (reçu ${count})`);
+    assert(!/\(power\s+(?:global|local)\)/.test(text), "plus aucun (power global|local)");
+    assert((text.match(/\(power\)/g) ?? []).length === 3, "3× (power) nu après normalisation");
+    const idem = g5.normalizeKicadSchPower("(power)");
+    assert(idem.count === 0 && idem.text === "(power)", "schéma déjà compatible : inchangé, count 0");
   }
 
   if (failures.length > 0) {

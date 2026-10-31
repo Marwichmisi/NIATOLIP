@@ -6,6 +6,27 @@
 export const JLC_SPECS_COMMIT = "020e767d0c08794dec5eed2fa8635244c800599a";
 
 /**
+ * Normalisation KiCad 9 du schéma exporté (P0-6 #28).
+ * `circuit-json-to-kicad` émet les symboles rail (`Custom:rail_up/down`) avec
+ * `SymbolPower("global")`, soit `(power global)` dans le `.kicad_sch`. Ce token
+ * n'existe que depuis le format v10 : `kicad-cli 9.0.9` le rejette
+ * (`Failed to load schematic`, exit 3) alors que `(power)` nu charge.
+ * La longueur des pins (0,01 mm) est INNOCENTE — les power symbols natifs
+ * KiCad utilisent `length 0` (doc : eeschema_symbols_and_libraries.adoc).
+ * Remplace `(power global|local)` par `(power)` (minuscules strictes, telles
+ * qu'émises par le convertisseur). Pure, testée par `npm run g5:fixtures`.
+ */
+export function normalizeKicadSchPower(sch) {
+  if (typeof sch !== "string") return { text: sch, count: 0 };
+  let count = 0;
+  const text = sch.replace(/\(power\s+(?:global|local)\)/g, (m) => {
+    count++;
+    return "(power)";
+  });
+  return { text, count };
+}
+
+/**
  * Plancher JLCPCB — copie synchronisée de `jlcMinTolerances` du commit épinglé.
  * Le paquet github n'expose que du `.ts` (pas de dist) : le worker Node pur ne
  * peut pas l'importer, d'où cet inline versionné. Test de sync : bloc G5-9 de

@@ -18,6 +18,7 @@ import {
   checkJlcSpecs,
   computeCoverage,
   getPcbBoardId,
+  normalizeKicadSchPower,
   parsePartsJson,
 } from "./g5.js";
 
@@ -27,7 +28,7 @@ const { Pool } = pkg;
 // Toute montée de version = PR dédiée (doc 01 §6).
 const TSCIRCUIT_EVAL_VERSION = "0.0.1668";
 const TSCIRCUIT_CORE_VERSION = "0.0.2230";
-const CONVERTER_KICAD_VERSION = "0.0.258";
+const CONVERTER_KICAD_VERSION = "0.0.262";
 const CONVERTER_GERBER_VERSION = "0.0.122";
 const CONVERTER_BOM_VERSION = "0.0.24";
 const CONVERTER_PNP_VERSION = "0.0.21";
@@ -468,7 +469,12 @@ async function processJob(job) {
   proConv.runUntilFinished();
   const schPath = join(workdir, "project.kicad_sch");
   const pcbPath = join(workdir, "project.kicad_pcb");
-  await writeFile(schPath, schConv.getOutputString());
+  // P0-6 #28 : normalisation `(power global|local)` → `(power)` pour kicad-cli
+  // 9.0.9 (le format v10 est rejeté avec `Failed to load schematic`, exit 3).
+  // Les pins rail à 0,01 mm sont innocentes (symboles natifs à `length 0`).
+  const rawSch = schConv.getOutputString();
+  const { text: normalizedSch, count: powerNormalized } = normalizeKicadSchPower(rawSch);
+  await writeFile(schPath, normalizedSch);
   await writeFile(pcbPath, pcbConv.getOutputString());
   await writeFile(join(workdir, "project.kicad_pro"), proConv.getOutputString());
   try {
@@ -503,6 +509,11 @@ async function processJob(job) {
   };
 
   const warnings = [];
+  if (powerNormalized > 0) warnings.push(`Schéma KiCad normalisé pour KiCad 9 : ${powerNormalized} occurrence(s) \`(power global|local)\` → \`(power)\` (P0-6 #28, convertisseur circuit-json-to-kicad ${CONVERTER_KICAD_VERSION}).`);
+  // Tri hole_clearance (P0-6 #28) : `hole_clearance` < 0,2 mm reste une ERREUR
+  // bloquante G4 — c'est la spec JLCPCB publique « Via hole to Track : 0,2 mm »
+  // (pas un artefact du convertisseur, pas un warning fabricant). Cause probée :
+  // marge obstacle 0,15 du solveur < 0,2 requis ; aucune décote ici.
   if (ercParsed.summary.unparsed || drcParsed.summary.unparsed) warnings.push("Schéma JSON kicad-cli inattendu : violations traitées comme bloquantes (strict).");
 
   // Artefacts toujours produits : sources + rapport (même en G4 rouge, sans exports finaux).

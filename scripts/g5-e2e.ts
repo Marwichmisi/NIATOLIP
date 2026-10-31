@@ -1,7 +1,12 @@
-// Preuve E2E #13 — job worker réel sur carte minimale (fixtures/g5-e2e/minimal.tsx).
-// Usage : `tsx scripts/g5-e2e.ts` (web + worker Docker rebuildés avec le code P0-2).
+// Preuve E2E #13 + P0-6 #28 — job worker réel sur board représentatif à nets
+// nommés (fixtures/gates/healthy-graetz.tsx, cas de référence doc 12 §7).
+// Usage : `tsx scripts/g5-e2e.ts` (web + worker Docker rebuildés avec le code P0-6).
 // Crée un projet, pousse main.tsx + parts.json, lance POST validate, poll
-// jusqu'à done, contrôle G5-PCB/G5-PCBA + PnP coordonné.
+// jusqu'à done, contrôle G4 vert + G5-PCB/G5-PCBA jugées.
+// Historique : le board minimal sans rails (fixtures/g5-e2e/minimal.tsx) servait
+// de board d'évitement tant que `(power global)` du convertisseur faisait
+// échouer tout ERC kicad-cli 9.0.9 (exit 3) — normalisation worker P0-6 #28.
+// Le Graetz prouve désormais le pipeline G4/G5 sur design réel (VRECT/VCC/GND).
 import { readFile } from "node:fs/promises";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:3001";
@@ -14,19 +19,23 @@ async function api(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
-  // Carte minimale E2E (fixtures/g5-e2e/minimal.tsx) : 100 % CMS, sans nets
-  // nommés — les symboles rail du convertisseur (pins 0,01 mm) font échouer
-  // le chargement ERC kicad-cli (limitation G4 pré-existante, hors P0-2).
-  const code = await readFile(new URL("../fixtures/g5-e2e/minimal.tsx", import.meta.url), "utf8");
+  // Board représentatif P0-6 : Graetz à nets nommés (VRECT/VCC/GND) — les rails
+  // `Custom:rail_up/down` du convertisseur sont normalisés `(power)` côté worker.
+  const code = await readFile(new URL("../fixtures/gates/healthy-graetz.tsx", import.meta.url), "utf8");
+  // BOM de preuve : refs du Graetz ; LCSC plausibles (stock inconnu = warning
+  // G5-PCBA, jamais bloquant ; rupture confirmée = erreur).
   const parts = [
-    { ref: "R1", lcsc: "C25744", mpn: "0402WGF1002TCE", role: "LED série 1 kΩ" },
+    { ref: "BR1", lcsc: "C4004", mpn: "DB107", role: "Pont redresseur Graetz" },
+    { ref: "C1", lcsc: "C1525", mpn: "CL05B104KO5NNNC", role: "Découplage 100 nF" },
+    { ref: "U1", lcsc: "C2924396", mpn: "BCT2057ELT33-TR", role: "LDO 3,3 V" },
+    { ref: "RLED", lcsc: "C25744", mpn: "0402WGF1002TCE", role: "LED série 1 kΩ" },
     { ref: "D1", lcsc: "C6848499", mpn: "150060VS75000", role: "LED verte" },
   ];
-  const created = (await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "e2e-g5-minimal" }) })) as { project: { id: string } };
+  const created = (await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "e2e-g5-graetz" }) })) as { project: { id: string } };
   const projectId = created.project.id;
-  console.log(`projet ${projectId} (e2e-g5-minimal : R1+D1, sans rails — voir R1 revue #13)`);
+  console.log(`projet ${projectId} (e2e-g5-graetz : Graetz à nets nommés, P0-6 #28)`);
   await api(`/api/projects/${projectId}/files`, { method: "PUT", body: JSON.stringify({ files: { "main.tsx": code, "parts.json": JSON.stringify(parts, null, 2) } }) });
-  const job = (await api(`/api/projects/${projectId}/validate`, { method: "POST", body: JSON.stringify({ label: "e2e G5" }) })) as { jobId: string };
+  const job = (await api(`/api/projects/${projectId}/validate`, { method: "POST", body: JSON.stringify({ label: "e2e G5 Graetz" }) })) as { jobId: string };
   console.log(`job ${job.jobId} queued`);
   const deadline = Date.now() + 9 * 60_000;
   for (;;) {
@@ -44,16 +53,15 @@ async function main(): Promise<void> {
       const kinds = (j.artifacts ?? []).map((a) => a.kind).sort().join(",");
       console.log(`  artefacts: ${kinds}`);
       if (j.status !== "done") throw new Error(`job en erreur: ${j.error}`);
-      if (j.g4?.status !== "pass") throw new Error("E2E rouge: G4 doit passer sur le board minimal");
-      if (j.g5_pcb?.status !== "pass") throw new Error("E2E rouge: G5-PCB doit passer sur le board minimal");
+      if (j.g4?.status !== "pass") throw new Error("E2E rouge: G4 doit passer sur le Graetz (rails normalisés P0-6)");
+      if (j.g5_pcb?.status !== "pass") throw new Error("E2E rouge: G5-PCB doit passer sur le Graetz");
       if (!j.g5_pcba) throw new Error("E2E rouge: G5-PCBA absente (worker non à jour ?)");
       console.log(`  G5-PCBA: ${j.g5_pcba.status} stats=${JSON.stringify(j.g5_pcba.stats)}`);
       if (!kinds.includes("pnp") || !kinds.includes("gerber") || !kinds.includes("bom") || !kinds.includes("report")) {
         throw new Error(`E2E rouge: pack incomplet (${kinds})`);
       }
-      // Board d'évitement (sans rails) : prouve le pipeline G5, pas un design
-      // représentatif — le Graetz attend le fix G4-compat (tâche P0 dédiée).
-      console.log("E2E G5 OK (board minimal, sans rails) : G4 + G5-PCB verts, G5-PCBA jugée, pack complet.");
+      // Critère de sortie P0-6 : G4 vert sur Graetz, G5 jugées, sans board d'évitement.
+      console.log("E2E G5 OK (Graetz à nets nommés) : G4 + G5-PCB verts, G5-PCBA jugée, pack complet.");
       if (process.env.E2E_CLEANUP === "1") {
         await api(`/api/projects/${projectId}`, { method: "DELETE" });
         console.log("projet E2E nettoyé (E2E_CLEANUP=1).");
